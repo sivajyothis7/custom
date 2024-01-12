@@ -28,6 +28,16 @@ def add_item():
 
     item_doc.insert()
 
+@frappe.whitelist()
+def add_customer():
+    data = json.loads(frappe.request.data)
+    
+    new_cus = frappe.get_doc({
+            "doctype": "Customer",
+            "customer_name": data.get("customer_name")
+        })
+
+    new_cus.insert()
 
     # return customer_doc
     # print(f"\n\n{data}\n\n")
