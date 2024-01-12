@@ -34,7 +34,7 @@ def add_customer():
     
     new_cus = frappe.get_doc({
             "doctype": "Customer",
-            "customer_name": data.get("customer_name")
+            "customer_name": data.get("customer_name"),
         })
 
     new_cus.insert()
