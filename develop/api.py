@@ -26,4 +26,17 @@ def add_customer():
 
     new_cus.insert()
 
-  
+@frappe.whitelist()
+def add_sales_invoice():
+    data = json.loads(frappe.request.data)
+
+    sales_invoice_doc = frappe.get_doc({
+        "doctype": "Sales Invoice",
+        "customer": data.get("customer"),
+        "posting_date": data.get("posting_date"),
+        "items": data.get("items"), 
+    })
+
+
+    sales_invoice_doc.insert()
+    sales_invoice_doc.submit()  
