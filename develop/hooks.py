@@ -162,7 +162,10 @@ app_license = "mit"
 # override_whitelisted_methods = {
 # 	"frappe.desk.doctype.event.event.get_events": "develop.event.get_events"
 # }
-#
+override_whitelisted_methods = {
+    "frappe.core.doctype.user.user.sign_up": "develop.rest.custom_signup"
+}
+
 # each overriding function accepts a `data` argument;
 # generated from the base implementation of the doctype dashboard,
 # along with any modifications made in other Frappe apps
