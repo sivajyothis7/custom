@@ -59,25 +59,29 @@ def custom_signup(mobile_number, password, full_name, email, password_confirmati
 
 
 
-
-
-
 @frappe.whitelist(allow_guest=True)
-def custom_login(mobile_number, password):
+def custom_login(username, password):
+    """
+    Custom login function supporting both email and mobile number as the username.
+    """
     try:
-        frappe.logger().info(f"Attempting login for mobile number: {mobile_number}")
+        frappe.logger().info(f"Attempting login for username: {username}")
 
-        user = frappe.db.get_value("User", {"mobile_no": mobile_number}, ["name", "enabled", "email"], as_dict=True)
+        if "@" in username and "." in username:
+            user = frappe.db.get_value("User", {"email": username}, ["name", "enabled", "email", "mobile_no"], as_dict=True)
+        else:
+            user = frappe.db.get_value("User", {"mobile_no": username}, ["name", "enabled", "email", "mobile_no"], as_dict=True)
+
         if not user:
-            frappe.logger().error(f"User with mobile number {mobile_number} does not exist.")
+            frappe.logger().error(f"User with username {username} does not exist.")
             frappe.local.response["message"] = {
                 "success_key": 0,
-                "message": _("Invalid mobile number or password.")
+                "message": _("Invalid email/ mobile number or password.")
             }
             return
 
         if not user["enabled"]:
-            frappe.logger().error(f"User with mobile number {mobile_number} is disabled.")
+            frappe.logger().error(f"User with username {username} is disabled.")
             frappe.local.response["message"] = {
                 "success_key": 0,
                 "message": _("User is disabled. Please contact the administrator.")
@@ -86,44 +90,23 @@ def custom_login(mobile_number, password):
 
         login_manager = frappe.auth.LoginManager()
         login_manager.authenticate(user=user["email"], pwd=password)
-        frappe.logger().info(f"User with mobile number {mobile_number} authenticated successfully.")
+        frappe.logger().info(f"User with username {username} authenticated successfully.")
 
         login_manager.post_login()
         frappe.logger().info(f"Post-login setup completed for user {user['email']}.")
 
         user_doc = frappe.get_doc('User', frappe.session.user)
 
-        api_secret = generate_keys(user_doc)
-
         frappe.local.response["message"] = {
-            "success_key": 1,
-            "message": _("Authentication successful."),
-            "sid": frappe.session.sid,
+            "message": _("Login successful."),
             "username": user_doc.username or user_doc.first_name,
             "email": user_doc.email,
-            "mobile_number": user_doc.mobile_no,
-            "api_key": user_doc.api_key,
-            "api_secret": api_secret
+            "mobile_number": user_doc.mobile_no
         }
     except frappe.exceptions.AuthenticationError:
-        frappe.logger().error(f"Authentication failed for mobile number: {mobile_number}")
+        frappe.logger().error(f"Authentication failed for username: {username}")
         frappe.clear_messages()
         frappe.local.response["message"] = {
             "success_key": 0,
-            "message": _("Invalid mobile number or password.")
+            "message": _("Invalid email/mobile number or password.")
         }
-
-
-def generate_keys(user):
-    """
-    Generate API Key and API Secret for the user if they don't already exist.
-    """
-    api_secret = frappe.generate_hash(length=15)
-    if not user.api_key:
-        user.api_key = frappe.generate_hash(length=15)
-
-    user.api_secret = api_secret
-    user.save(ignore_permissions=True)
-
-    frappe.logger().info(f"Generated API Key: {user.api_key}, API Secret: {api_secret}")
-    return api_secret
