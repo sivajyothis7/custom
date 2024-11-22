@@ -163,7 +163,8 @@ app_license = "mit"
 # 	"frappe.desk.doctype.event.event.get_events": "develop.event.get_events"
 # }
 override_whitelisted_methods = {
-    "frappe.core.doctype.user.user.sign_up": "develop.rest.custom_signup"
+    "frappe.core.doctype.user.user.sign_up": "develop.rest.custom_signup",
+     "frappe.core.doctype.user.user.login": "develop.rest.custom_login"
 }
 
 # each overriding function accepts a `data` argument;
