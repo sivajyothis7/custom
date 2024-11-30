@@ -108,5 +108,21 @@ def custom_login(username, password):
         frappe.clear_messages()
         frappe.local.response["message"] = {
             "success_key": 0,
-            "message": _("Invalid email/mobile number or password.")
+            "message": _("Invalid email/ mobile number or password.")
         }
+
+@frappe.whitelist(allow_guest=True)
+def get_eoi_with_units():
+    eoi_records = frappe.get_all(
+        "EOI For Land",
+        fields=["name", "district"] 
+    )
+    
+    for record in eoi_records:
+        record["units_and_sub_units"] = frappe.get_all(
+            "Units and Sub units", 
+            filters={"parent": record["name"]},  
+            fields=["table_btso", "another_field"]  
+        )
+    
+    return eoi_records

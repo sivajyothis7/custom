@@ -129,6 +129,23 @@ app_license = "mit"
 # 		"on_trash": "method"
 # 	}
 # }
+# In your_app/hooks.py
+# doc_events = {
+#     "User": {
+#         "on_update": "develop.test.create_user_in_external_system",
+#         "after_insert": "develop.test.create_user_in_external_system"
+#     }
+# }
+
+# In your hooks.py file, add the following
+
+# doc_events = {
+#     "Item": {
+#         "on_update": "develop.test.send_created_item_details",
+#         "after_insert": "develop.test.send_created_item_details"
+#     }
+# }
+
 
 # Scheduled Tasks
 # ---------------
@@ -164,7 +181,8 @@ app_license = "mit"
 # }
 override_whitelisted_methods = {
     "frappe.core.doctype.user.user.sign_up": "develop.rest.custom_signup",
-     "frappe.core.doctype.user.user.login": "develop.rest.custom_login"
+     "frappe.core.doctype.user.user.login": "develop.rest.custom_login",
+     "get_eoi_with_units": "develop.api.get_eoi_with_units"
 }
 
 # each overriding function accepts a `data` argument;
