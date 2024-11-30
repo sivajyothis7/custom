@@ -119,10 +119,10 @@ def get_eoi_with_units():
     )
     
     for record in eoi_records:
-        record["units_and_sub_units"] = frappe.get_all(
+        record["table_btso"] = frappe.get_all(
             "Units and Sub units", 
             filters={"parent": record["name"]},  
-            fields=["table_btso", "another_field"]  
+            fields=["name1", "area_acre","type"]  
         )
     
     return eoi_records
