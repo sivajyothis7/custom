@@ -117,24 +117,20 @@ def custom_login(username, password):
 
 @frappe.whitelist(allow_guest=True)
 def get_units():
-    # Fetch all EOI records
     eoi_records = frappe.get_all(
         "EOI For Land",
         fields=["name"]
     )
     
-    # Prepare a list to store unit data
     unit_data = []
 
     for record in eoi_records:
-        # Fetch units with type "Unit"
         units = frappe.get_all(
             "Units and Sub units",
             filters={"parent": record["name"], "type": "Unit"},
             fields=["name1"]
         )
         
-        # Add each unit as a separate dictionary to the response
         for unit in units:
             unit_data.append({"unit": unit["name1"]})
     
@@ -146,9 +142,11 @@ def get_units():
 def get_sub_units():
     eoi_records = frappe.get_all(
         "EOI For Land",
-        fields=["name", "district"]
+        fields=["name"]
     )
     
+    sub_unit_data = []
+
     for record in eoi_records:
         sub_units = frappe.get_all(
             "Units and Sub units",
@@ -156,9 +154,11 @@ def get_sub_units():
             fields=["name1"]
         )
         
-        record["sub_unit"] = [sub_unit["name1"] for sub_unit in sub_units]
+        for sub_unit in sub_units:
+            sub_unit_data.append({"sub_unit": sub_unit["name1"]})
     
-    return eoi_records
+    return sub_unit_data
+
 
 # @frappe.whitelist(allow_guest=True)
 # def get_eoi_with_units():
