@@ -74,6 +74,7 @@ def custom_login(username, password):
 
         if not user:
             frappe.logger().error(f"User with username {username} does not exist.")
+            frappe.local.response["http_status_code"] = 400
             frappe.local.response["message"] = {
                 "success_key": 0,
                 "message": _("Invalid email/ mobile number or password.")
@@ -82,6 +83,7 @@ def custom_login(username, password):
 
         if not user["enabled"]:
             frappe.logger().error(f"User with username {username} is disabled.")
+            frappe.local.response["http_status_code"] = 400
             frappe.local.response["message"] = {
                 "success_key": 0,
                 "message": _("User is disabled. Please contact the administrator.")
@@ -97,6 +99,7 @@ def custom_login(username, password):
 
         user_doc = frappe.get_doc('User', frappe.session.user)
 
+        frappe.local.response["http_status_code"] = 200
         frappe.local.response["message"] = {
             "message": _("Login successful."),
             "username": user_doc.username or user_doc.first_name,
@@ -106,10 +109,12 @@ def custom_login(username, password):
     except frappe.exceptions.AuthenticationError:
         frappe.logger().error(f"Authentication failed for username: {username}")
         frappe.clear_messages()
+        frappe.local.response["http_status_code"] = 400
         frappe.local.response["message"] = {
             "success_key": 0,
             "message": _("Invalid email/ mobile number or password.")
         }
+
 
 @frappe.whitelist(allow_guest=True)
 def get_eoi_with_units():
