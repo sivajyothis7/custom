@@ -117,13 +117,11 @@ def custom_login(username, password):
 
 @frappe.whitelist(allow_guest=True)
 def get_units():
-    # Fetch all EOI records
     eoi_records = frappe.get_all(
         "EOI For Land",
         fields=["name", "district"]
     )
     
-    # Fetch child records with type 'Unit'
     for record in eoi_records:
         units = frappe.get_all(
             "Units and Sub units",
@@ -131,20 +129,17 @@ def get_units():
             fields=["name1"]
         )
         
-        # Include 'name1' values directly in the parent record
-        record["unit_name1_values"] = [unit["name1"] for unit in units]
+        record["unit"] = [unit["name1"] for unit in units]
     
     return eoi_records
 
 @frappe.whitelist(allow_guest=True)
 def get_sub_units():
-    # Fetch all EOI records
     eoi_records = frappe.get_all(
         "EOI For Land",
         fields=["name", "district"]
     )
     
-    # Fetch child records with type 'Sub Unit'
     for record in eoi_records:
         sub_units = frappe.get_all(
             "Units and Sub units",
@@ -152,8 +147,7 @@ def get_sub_units():
             fields=["name1"]
         )
         
-        # Include 'name1' values directly in the parent record
-        record["sub_unit_name1_values"] = [sub_unit["name1"] for sub_unit in sub_units]
+        record["sub_unit"] = [sub_unit["name1"] for sub_unit in sub_units]
     
     return eoi_records
 
