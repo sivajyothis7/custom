@@ -126,12 +126,14 @@ def get_eoi_with_units():
     
     # Iterate through each record and fetch child records
     for record in eoi_records:
+        # Fetch child records and extract 'name1'
         units = frappe.get_all(
             "Units and Sub units",
             filters={"parent": record["name"]},
-            fields=["name1", "area_acre", "type"]
+            fields=["name1"]
         )
-        # Directly include 'name1' from the child table in the parent
-        record["units"] = [{"name1": unit["name1"]} for unit in units]
+        
+        # Include 'name1' values directly in the parent record
+        record["name1_values"] = [unit["name1"] for unit in units]
     
     return eoi_records
