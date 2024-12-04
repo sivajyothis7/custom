@@ -118,16 +118,20 @@ def custom_login(username, password):
 
 @frappe.whitelist(allow_guest=True)
 def get_eoi_with_units():
+    # Fetch all EOI records
     eoi_records = frappe.get_all(
         "EOI For Land",
-        fields=["name", "district"] 
+        fields=["name", "district"]
     )
     
+    # Iterate through each record and fetch child records
     for record in eoi_records:
-        record["table_btso"] = frappe.get_all(
-            "Units and Sub units", 
-            filters={"parent": record["name"]},  
-            fields=["name1", "area_acre","type"]  
+        units = frappe.get_all(
+            "Units and Sub units",
+            filters={"parent": record["name"]},
+            fields=["name1", "area_acre", "type"]
         )
+        # Directly include 'name1' from the child table in the parent
+        record["units"] = [{"name1": unit["name1"]} for unit in units]
     
     return eoi_records
