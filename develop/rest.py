@@ -134,12 +134,12 @@ def get_units():
             fields=["name1"]
         )
         
-        # Add only the unit values to the response
-        unit_data.append({
-            "unit": [unit["name1"] for unit in units]
-        })
+        # Add each unit as a separate dictionary to the response
+        for unit in units:
+            unit_data.append({"unit": unit["name1"]})
     
     return unit_data
+
 
 
 @frappe.whitelist(allow_guest=True)
