@@ -115,25 +115,62 @@ def custom_login(username, password):
             "message": _("Invalid email/ mobile number or password.")
         }
 
-
 @frappe.whitelist(allow_guest=True)
-def get_eoi_with_units():
+def get_units():
     # Fetch all EOI records
     eoi_records = frappe.get_all(
         "EOI For Land",
         fields=["name", "district"]
     )
     
-    # Iterate through each record and fetch child records
+    # Fetch child records with type 'Unit'
     for record in eoi_records:
-        # Fetch child records and extract 'name1'
         units = frappe.get_all(
             "Units and Sub units",
-            filters={"parent": record["name"]},
+            filters={"parent": record["name"], "type": "Unit"},
             fields=["name1"]
         )
         
         # Include 'name1' values directly in the parent record
-        record["name1_values"] = [unit["name1"] for unit in units]
+        record["unit_name1_values"] = [unit["name1"] for unit in units]
     
     return eoi_records
+
+@frappe.whitelist(allow_guest=True)
+def get_sub_units():
+    # Fetch all EOI records
+    eoi_records = frappe.get_all(
+        "EOI For Land",
+        fields=["name", "district"]
+    )
+    
+    # Fetch child records with type 'Sub Unit'
+    for record in eoi_records:
+        sub_units = frappe.get_all(
+            "Units and Sub units",
+            filters={"parent": record["name"], "type": "Sub Unit"},
+            fields=["name1"]
+        )
+        
+        # Include 'name1' values directly in the parent record
+        record["sub_unit_name1_values"] = [sub_unit["name1"] for sub_unit in sub_units]
+    
+    return eoi_records
+
+# @frappe.whitelist(allow_guest=True)
+# def get_eoi_with_units():
+#     eoi_records = frappe.get_all(
+#         "EOI For Land",
+#         fields=["name", "district"]
+#     )
+    
+#     for record in eoi_records:
+#         units = frappe.get_all(
+#             "Units and Sub units",
+#             filters={"parent": record["name"]},
+#             fields=["name1"]
+#         )
+        
+#         record["name1_values"] = [unit["name1"] for unit in units]
+    
+#     return eoi_records
