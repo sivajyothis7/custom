@@ -136,6 +136,11 @@ app_license = "mit"
 #         "after_insert": "develop.test.create_user_in_external_system"
 #     }
 # }
+# doc_events = {
+#     "User": {
+#         "on_update": "develop.rest.update_user_credentials",
+#     }
+# }
 
 # In your hooks.py file, add the following
 
@@ -182,7 +187,8 @@ app_license = "mit"
 override_whitelisted_methods = {
     "frappe.core.doctype.user.user.sign_up": "develop.rest.custom_signup",
      "frappe.core.doctype.user.user.login": "develop.rest.custom_login",
-     "get_eoi_with_units": "develop.api.get_eoi_with_units"
+     "get_eoi_with_units": "develop.api.get_eoi_with_units",
+     "user_cred": "develop.rest.user_cred"
 }
 
 # each overriding function accepts a `data` argument;

@@ -160,6 +160,50 @@ def get_sub_units():
     return sub_unit_data
 
 
+
+
+@frappe.whitelist(allow_guest=False)
+def user_cred():
+    user = frappe.session.user 
+    
+    user_doc = frappe.get_doc("User", user)
+    
+    if frappe.request.method == "GET":
+        return {
+            "full_name": user_doc.full_name,
+            "mobile_no": user_doc.mobile_no,
+            "email": user_doc.email,
+            "location": user_doc.location 
+        }
+    
+    elif frappe.request.method == "PUT":
+        first_name = frappe.local.form_dict.get('first_name')
+        last_name = frappe.local.form_dict.get('last_name')
+        mobile_no = frappe.local.form_dict.get('mobile_no')
+        location = frappe.local.form_dict.get('location')
+        
+        if first_name:
+            user_doc.first_name = first_name
+
+        if last_name:
+            user_doc.last_name = last_name
+
+        if mobile_no:
+            user_doc.mobile_no = mobile_no
+
+    
+
+        if location is not None: 
+            user_doc.location = location
+        
+        user_doc.save()
+        frappe.db.commit()
+
+        return {"message": _("User details updated successfully")}
+
+
+
+
 # @frappe.whitelist(allow_guest=True)
 # def get_eoi_with_units():
 #     eoi_records = frappe.get_all(
