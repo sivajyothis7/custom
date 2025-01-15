@@ -57,6 +57,7 @@ def custom_signup(mobile_number, password, full_name, email, password_confirmati
 
 
 
+
 @frappe.whitelist(allow_guest=True)
 def custom_login(mobile_number, password):
     try:
@@ -65,19 +66,13 @@ def custom_login(mobile_number, password):
         user = frappe.db.get_value("User", {"mobile_no": mobile_number}, ["name", "enabled", "email"], as_dict=True)
         if not user:
             frappe.logger().error(f"User with mobile number {mobile_number} does not exist.")
-            frappe.local.response["message"] = {
-                "success_key": 0,
-                "message": _("Invalid mobile number or password.")
-            }
-            return
+            frappe.local.response["http_status_code"] = 401
+            frappe.throw(_("Invalid mobile number or password."), frappe.exceptions.AuthenticationError)
 
         if not user["enabled"]:
             frappe.logger().error(f"User with mobile number {mobile_number} is disabled.")
-            frappe.local.response["message"] = {
-                "success_key": 0,
-                "message": _("User is disabled. Please contact the administrator.")
-            }
-            return
+            frappe.local.response["http_status_code"] = 403
+            frappe.throw(_("User is disabled. Please contact the administrator."), frappe.exceptions.AuthenticationError)
 
         login_manager = frappe.auth.LoginManager()
         login_manager.authenticate(user=user["email"], pwd=password)
@@ -87,7 +82,6 @@ def custom_login(mobile_number, password):
         frappe.logger().info(f"Post-login setup completed for user {user['email']}.")
 
         user_doc = frappe.get_doc('User', frappe.session.user)
-
         api_secret = generate_keys(user_doc)
 
         frappe.local.response["message"] = {
@@ -100,13 +94,10 @@ def custom_login(mobile_number, password):
             "api_key": user_doc.api_key,
             "api_secret": api_secret
         }
-    except frappe.exceptions.AuthenticationError:
-        frappe.logger().error(f"Authentication failed for mobile number: {mobile_number}")
-        frappe.clear_messages()
-        frappe.local.response["message"] = {
-            "success_key": 0,
-            "message": _("Invalid mobile number or password.")
-        }
+    except frappe.exceptions.AuthenticationError as e:
+        frappe.logger().error(f"Authentication failed for mobile number: {mobile_number}: {str(e)}")
+        frappe.local.response["http_status_code"] = 401
+        frappe.throw(_("Invalid mobile number or password."), frappe.exceptions.AuthenticationError)
 
 
 def generate_keys(user):
