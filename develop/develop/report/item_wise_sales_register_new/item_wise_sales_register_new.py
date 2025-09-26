@@ -188,7 +188,7 @@ def get_columns(additional_table_columns, filters):
     columns += [
         {"label": _("Project"), "fieldname": "project", "fieldtype": "Link", "options": "Project", "width": 80},
         {"label": _("Company"), "fieldname": "company", "fieldtype": "Link", "options": "Company", "width": 80},
-		{"label": _("Reference"), "fieldname": "pos_invoice", "fieldtype": "Link", "options": "POS Invoice", "width": 120},
+		{"label": _("Reference"), "fieldname": "pos_invoice", "fieldtype": "Link", "options": "POS Invoice", "width": 150},
         {"label": _("Sales Order"), "fieldname": "sales_order", "fieldtype": "Link", "options": "Sales Order", "width": 100},
         {"label": _("Delivery Note"), "fieldname": "delivery_note", "fieldtype": "Link", "options": "Delivery Note", "width": 100},
         {"label": _("Income Account"), "fieldname": "income_account", "fieldtype": "Link", "options": "Account", "width": 100},
