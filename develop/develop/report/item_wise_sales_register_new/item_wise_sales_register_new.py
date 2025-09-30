@@ -14,6 +14,25 @@ from erpnext.selling.report.item_wise_sales_history.item_wise_sales_history impo
     get_customer_details,
 )
 
+def get_mode_of_payments(pos_invoices):
+    """Returns a mapping {pos_invoice: [mode_of_payment]}"""
+    mode_map = {}
+    if not pos_invoices:
+        return mode_map
+
+    payments = frappe.db.get_all(
+        "POS Invoice Payment",
+        filters={"parent": ("in", list(pos_invoices))},
+        fields=["parent", "mode_of_payment"],
+    )
+
+    for p in payments:
+        mode_map.setdefault(p.parent, []).append(p.mode_of_payment)
+
+    return mode_map
+
+
+
 def execute(filters=None):
     return _execute(filters)
 
@@ -35,7 +54,11 @@ def _execute(filters=None, additional_table_columns=None, additional_conditions=
                 tax + " Amount": frappe.scrub(tax + " Amount"),
             })
 
-    mode_of_payments = get_mode_of_payments(set(d.parent for d in item_list))
+    # mode_of_payments = get_mode_of_payments(set(d.parent for d in item_list))
+
+	pos_invoice_set = set(d.pos_invoice for d in item_list if d.pos_invoice)
+	mode_of_payments = get_mode_of_payments(pos_invoice_set)
+
     so_dn_map = get_delivery_notes_against_sales_order(item_list)
 
     data = []
