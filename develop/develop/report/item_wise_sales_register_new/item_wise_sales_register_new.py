@@ -1,6 +1,8 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 # License: GNU General Public License v3. See license.txt
 
+
+
 import frappe
 from frappe import _
 from frappe.model.meta import get_field_precision
@@ -13,6 +15,7 @@ from erpnext.accounts.report.utils import get_query_columns, get_values_for_colu
 from erpnext.selling.report.item_wise_sales_history.item_wise_sales_history import (
     get_customer_details,
 )
+
 
 def get_mode_of_payments(pos_invoices):
     """Returns a mapping {pos_invoice: [mode_of_payment]}"""
@@ -32,21 +35,20 @@ def get_mode_of_payments(pos_invoices):
     return mode_map
 
 
-
 def execute(filters=None):
     return _execute(filters)
+
 
 def _execute(filters=None, additional_table_columns=None, additional_conditions=None):
     if not filters:
         filters = {}
-    columns = get_columns(additional_table_columns, filters)
 
+    columns = get_columns(additional_table_columns, filters)
     company_currency = frappe.get_cached_value("Company", filters.get("company"), "default_currency")
 
     item_list = get_items(filters, additional_table_columns, additional_conditions)
     if item_list:
         itemised_tax, tax_columns = get_tax_accounts(item_list, columns, company_currency)
-
         scrubbed_tax_fields = {}
         for tax in tax_columns:
             scrubbed_tax_fields.update({
@@ -54,11 +56,9 @@ def _execute(filters=None, additional_table_columns=None, additional_conditions=
                 tax + " Amount": frappe.scrub(tax + " Amount"),
             })
 
-    # mode_of_payments = get_mode_of_payments(set(d.parent for d in item_list))
-
-	pos_invoice_set = set(d.pos_invoice for d in item_list if d.pos_invoice)
-	mode_of_payments = get_mode_of_payments(pos_invoice_set)    
-	so_dn_map = get_delivery_notes_against_sales_order(item_list)
+    pos_invoice_set = set(d.pos_invoice for d in item_list if d.pos_invoice)
+    mode_of_payments = get_mode_of_payments(pos_invoice_set)
+    so_dn_map = get_delivery_notes_against_sales_order(item_list)
 
     data = []
     total_row_map = {}
@@ -72,13 +72,12 @@ def _execute(filters=None, additional_table_columns=None, additional_conditions=
 
     for d in item_list:
         customer_record = customer_details.get(d.customer)
-
         delivery_note = None
+
         if d.delivery_note:
             delivery_note = d.delivery_note
         elif d.so_detail:
             delivery_note = ", ".join(so_dn_map.get(d.so_detail, []))
-
         if not delivery_note and d.update_stock:
             delivery_note = d.parent
 
@@ -90,12 +89,12 @@ def _execute(filters=None, additional_table_columns=None, additional_conditions=
             "invoice": d.parent,
             "posting_date": d.posting_date,
             "customer": d.customer,
-            "customer_name": customer_record.customer_name,
-            "customer_group": customer_record.customer_group,
-            "pos_invoice": d.pos_invoice,  
+            "customer_name": customer_record.customer_name if customer_record else "",
+            "customer_group": customer_record.customer_group if customer_record else "",
+            "pos_invoice": d.pos_invoice,
             **get_values_for_columns(additional_table_columns, d),
             "debit_to": d.debit_to,
-			"mode_of_payment": ", ".join(mode_of_payments.get(d.pos_invoice, [])) if d.pos_invoice else "",
+            "mode_of_payment": ", ".join(mode_of_payments.get(d.pos_invoice, [])) if d.pos_invoice else "",
             "territory": d.territory,
             "project": d.project,
             "company": d.company,
@@ -136,15 +135,8 @@ def _execute(filters=None, additional_table_columns=None, additional_conditions=
             row.update({"percent_gt": flt(row["total"] / grand_total) * 100})
             group_by_field, subtotal_display_field = get_group_by_and_display_fields(filters)
             data, prev_group_by_value = add_total_row(
-                data,
-                filters,
-                prev_group_by_value,
-                d,
-                total_row_map,
-                group_by_field,
-                subtotal_display_field,
-                grand_total,
-                tax_columns,
+                data, filters, prev_group_by_value, d, total_row_map,
+                group_by_field, subtotal_display_field, grand_total, tax_columns
             )
             add_sub_total_row(row, total_row_map, d.get(group_by_field, ""), tax_columns)
 
@@ -161,6 +153,7 @@ def _execute(filters=None, additional_table_columns=None, additional_conditions=
 
     return columns, data, None, None, None, skip_total_row
 
+
 def get_income_account(row):
     if row.enable_deferred_revenue:
         return row.deferred_revenue_account
@@ -169,17 +162,18 @@ def get_income_account(row):
     else:
         return row.income_account
 
+
 def get_columns(additional_table_columns, filters):
     columns = []
 
-    if filters.get("group_by") != ("Item"):
+    if filters.get("group_by") != "Item":
         columns.extend([
             {"label": _("Item Code"), "fieldname": "item_code", "fieldtype": "Link", "options": "Item", "width": 120},
             {"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 120},
         ])
 
     if filters.get("group_by") not in ("Item", "Item Group"):
-        columns.extend([{"label": _("Item Group"), "fieldname": "item_group", "fieldtype": "Link", "options": "Item Group", "width": 120}])
+        columns.append({"label": _("Item Group"), "fieldname": "item_group", "fieldtype": "Link", "options": "Item Group", "width": 120})
 
     columns.extend([
         {"label": _("Description"), "fieldname": "description", "fieldtype": "Data", "width": 150},
@@ -188,7 +182,7 @@ def get_columns(additional_table_columns, filters):
     ])
 
     if filters.get("group_by") != "Customer":
-        columns.extend([{"label": _("Customer Group"), "fieldname": "customer_group", "fieldtype": "Link", "options": "Customer Group", "width": 120}])
+        columns.append({"label": _("Customer Group"), "fieldname": "customer_group", "fieldtype": "Link", "options": "Customer Group", "width": 120})
 
     if filters.get("group_by") not in ("Customer", "Customer Group"):
         columns.extend([
@@ -205,12 +199,12 @@ def get_columns(additional_table_columns, filters):
     ]
 
     if filters.get("group_by") != "Territory":
-        columns.extend([{"label": _("Territory"), "fieldname": "territory", "fieldtype": "Link", "options": "Territory", "width": 80}])
+        columns.append({"label": _("Territory"), "fieldname": "territory", "fieldtype": "Link", "options": "Territory", "width": 80})
 
     columns += [
         {"label": _("Project"), "fieldname": "project", "fieldtype": "Link", "options": "Project", "width": 80},
         {"label": _("Company"), "fieldname": "company", "fieldtype": "Link", "options": "Company", "width": 80},
-		{"label": _("Reference"), "fieldname": "pos_invoice", "fieldtype": "Link", "options": "POS Invoice", "width": 150},
+        {"label": _("Reference"), "fieldname": "pos_invoice", "fieldtype": "Link", "options": "POS Invoice", "width": 150},
         {"label": _("Sales Order"), "fieldname": "sales_order", "fieldtype": "Link", "options": "Sales Order", "width": 100},
         {"label": _("Delivery Note"), "fieldname": "delivery_note", "fieldtype": "Link", "options": "Delivery Note", "width": 100},
         {"label": _("Income Account"), "fieldname": "income_account", "fieldtype": "Link", "options": "Account", "width": 100},
@@ -225,8 +219,6 @@ def get_columns(additional_table_columns, filters):
         columns.append({"label": _("% Of Grand Total"), "fieldname": "percent_gt", "fieldtype": "Float", "width": 80})
 
     return columns
-
-#
 
 
 
