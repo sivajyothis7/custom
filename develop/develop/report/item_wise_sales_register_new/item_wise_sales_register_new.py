@@ -57,9 +57,8 @@ def _execute(filters=None, additional_table_columns=None, additional_conditions=
     # mode_of_payments = get_mode_of_payments(set(d.parent for d in item_list))
 
 	pos_invoice_set = set(d.pos_invoice for d in item_list if d.pos_invoice)
-	mode_of_payments = get_mode_of_payments(pos_invoice_set)
-
-    so_dn_map = get_delivery_notes_against_sales_order(item_list)
+	mode_of_payments = get_mode_of_payments(pos_invoice_set)    
+	so_dn_map = get_delivery_notes_against_sales_order(item_list)
 
     data = []
     total_row_map = {}
