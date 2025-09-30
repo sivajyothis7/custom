@@ -24,7 +24,7 @@ def get_mode_of_payments(pos_invoices):
         return mode_map
 
     payments = frappe.db.get_all(
-        "POS Invoice Payment",
+        "POS Invoice",
         filters={"parent": ("in", list(pos_invoices))},
         fields=["parent", "mode_of_payment"],
     )
