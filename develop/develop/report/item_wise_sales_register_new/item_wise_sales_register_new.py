@@ -70,10 +70,10 @@ def _execute(filters=None, additional_table_columns=None, additional_conditions=
             "customer": d.customer,
             "customer_name": customer_record.customer_name,
             "customer_group": customer_record.customer_group,
-            "pos_invoice": d.pos_invoice,  # Added Reference field
+            "pos_invoice": d.pos_invoice,  
             **get_values_for_columns(additional_table_columns, d),
             "debit_to": d.debit_to,
-            "mode_of_payment": ", ".join(mode_of_payments.get(d.parent, [])),
+			"mode_of_payment": ", ".join(mode_of_payments.get(d.pos_invoice, [])) if d.pos_invoice else ""
             "territory": d.territory,
             "project": d.project,
             "company": d.company,
