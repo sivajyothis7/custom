@@ -18,19 +18,24 @@ from erpnext.selling.report.item_wise_sales_history.item_wise_sales_history impo
 
 
 def get_mode_of_payments(pos_invoices):
-    """Returns a mapping {pos_invoice: [mode_of_payment]}"""
+    """Returns a mapping {pos_invoice: [mode_of_payment]} where amount > 0."""
     mode_map = {}
     if not pos_invoices:
         return mode_map
 
     payments = frappe.db.get_all(
         "Sales Invoice Payment",
-        filters={"parent": ("in", list(pos_invoices))},
+        filters={
+            "parent": ("in", list(pos_invoices)),
+            "amount": (">", 0), 
+            "mode_of_payment": ("is", "set")  
+        },
         fields=["parent", "mode_of_payment"],
     )
 
     for p in payments:
-        mode_map.setdefault(p.parent, []).append(p.mode_of_payment)
+        if p.mode_of_payment.strip(): 
+            mode_map.setdefault(p.parent, []).append(p.mode_of_payment.strip())
 
     return mode_map
 
