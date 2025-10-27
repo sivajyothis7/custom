@@ -109,6 +109,7 @@ def _execute(filters=None, additional_table_columns=None, additional_conditions=
             "cost_center": d.cost_center,
             "stock_qty": d.stock_qty,
             "stock_uom": d.stock_uom,
+			"distributed_discount_amount": d.distributed_discount_amount or 0,
         }
 
         if d.stock_uom != d.uom and d.stock_qty:
@@ -217,6 +218,7 @@ def get_columns(additional_table_columns, filters):
         {"label": _("Stock Qty"), "fieldname": "stock_qty", "fieldtype": "Float", "width": 100},
         {"label": _("Stock UOM"), "fieldname": "stock_uom", "fieldtype": "Link", "options": "UOM", "width": 100},
         {"label": _("Rate"), "fieldname": "rate", "fieldtype": "Float", "options": "currency", "width": 100},
+		{"label": _("Discount Amount"), "fieldname": "distributed_discount_amount", "fieldtype": "Currency", "options": "currency", "width": 100},
         {"label": _("Amount"), "fieldname": "amount", "fieldtype": "Currency", "options": "currency", "width": 100},
     ]
 
@@ -342,6 +344,7 @@ def get_items(filters, additional_query_columns, additional_conditions=None):
 			sii.uom,
 			sii.qty,
 			sii.pos_invoice,
+			sii.distributed_discount_amount,
 		)
 		.where(si.docstatus == 1)
 		.where(sii.parenttype == doctype)
