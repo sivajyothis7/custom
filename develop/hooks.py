@@ -117,6 +117,9 @@ app_license = "mit"
 # override_doctype_class = {
 # 	"ToDo": "custom_app.overrides.CustomToDo"
 # }
+override_doctype_class = {
+    "Leave Allocation": "develop.test.CustomLeaveAllocation"
+}
 
 # Document Events
 # ---------------
@@ -179,6 +182,15 @@ scheduler_events = {
         ],
         "*/3 * * * *": [
             "develop.api.sync_sales_orders_from_external_api"
+        ]
+    }
+}
+
+
+scheduler_events = {
+    "cron": {
+        "0 2 1 * *": [
+            "develop.test.allocate_comp_off"
         ]
     }
 }
