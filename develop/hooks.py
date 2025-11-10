@@ -175,16 +175,16 @@ override_doctype_class = {
 # 		"develop.tasks.monthly"
 # 	],
 # }
-scheduler_events = {
-    "cron": {
-        "*/2 * * * *": [
-            "develop.api.sync_customers_from_external_api"
-        ],
-        "*/3 * * * *": [
-            "develop.api.sync_sales_orders_from_external_api"
-        ]
-    }
-}
+# scheduler_events = {
+#     "cron": {
+#         "*/2 * * * *": [
+#             "develop.api.sync_customers_from_external_api"
+#         ],
+#         "*/3 * * * *": [
+#             "develop.api.sync_sales_orders_from_external_api"
+#         ]
+#     }
+# }
 
 
 scheduler_events = {
