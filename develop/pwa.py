@@ -338,6 +338,76 @@ def get_warehouse_list(company=None):
     }
 
 
+@frappe.whitelist()
+def get_sales_invoice_list():
+    """
+    Fetch Sales Invoice list using URL query parameters.
+    Supports:
+    - customer
+    - status
+    - start_date, end_date
+    - limit, offset
+    Also returns VAT (tax total) separately.
+    """
+
+    customer = frappe.form_dict.get("customer")
+    status = frappe.form_dict.get("status")
+    start_date = frappe.form_dict.get("start_date")
+    end_date = frappe.form_dict.get("end_date")
+
+    limit = cint(frappe.form_dict.get("limit", 50))
+    offset = cint(frappe.form_dict.get("offset", 0))
+
+    filters = {}
+
+    if customer:
+        filters["customer"] = customer
+
+    if status:
+        filters["status"] = status
+
+    if start_date and end_date:
+        filters["posting_date"] = ["between", [start_date, end_date]]
+
+    # Query invoices
+    invoice_names = frappe.get_all(
+        "Sales Invoice",
+        filters=filters,
+        fields=["name"],
+        order_by="posting_date desc",
+        limit_page_length=limit,
+        limit_start=offset
+    )
+
+    invoice_list = []
+
+    # Fetch complete fields per invoice
+    for inv in invoice_names:
+        doc = frappe.get_doc("Sales Invoice", inv.name)
+
+        invoice_list.append({
+            "name": doc.name,
+            "customer": doc.customer,
+            "company": doc.company,
+            "posting_date": doc.posting_date,
+            "due_date": doc.due_date,
+
+            "net_total": doc.net_total,
+            "tax_total": doc.total_taxes_and_charges,      
+            "grand_total": doc.grand_total,
+            "rounded_total": doc.rounded_total or doc.grand_total,
+
+            "outstanding_amount": doc.outstanding_amount,
+            "status": doc.status
+        })
+
+    return {
+        "status_code": 200,
+        "count": len(invoice_list),
+        "invoices": invoice_list
+    }
+
+
 
 
 
@@ -593,35 +663,32 @@ def create_sales_invoice():
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_invoice_details():
     """
-    API to get invoice details
+    API to get Sales Invoice details (query-based)
     
-    Method: GET
-    URL: /api/method/your_app.api.get_invoice_details
-    
-    Query Parameters:
-    - invoice_name: Sales Invoice name (required)
-    
-    Returns:
-        JSON with invoice details
+    Usage:
+    GET /api/method/develop.api.get_invoice_details?invoice_name=SINV-00010
     """
+
     try:
         invoice_name = frappe.form_dict.get("invoice_name")
-        
+
         if not invoice_name:
             return {
                 "status": "error",
                 "message": "invoice_name is required"
             }
-        
+
         if not frappe.db.exists("Sales Invoice", invoice_name):
             return {
                 "status": "error",
-                "message": f"Invoice {invoice_name} not found"
+                "message": f"Invoice '{invoice_name}' not found"
             }
-        
+
         doc = frappe.get_doc("Sales Invoice", invoice_name)
-        
-        # Build items list
+
+        # -------------------------
+        # Build Items List
+        # -------------------------
         items = []
         for item in doc.items:
             items.append({
@@ -634,16 +701,23 @@ def get_invoice_details():
                 "amount": item.amount,
                 "warehouse": item.warehouse
             })
-        
-        # Build taxes list
+
+        # -------------------------
+        # Build Taxes List
+        # -------------------------
         taxes = []
         for tax in doc.taxes:
             taxes.append({
+                "description": tax.description,
+                "charge_type": tax.charge_type,
                 "account_head": tax.account_head,
                 "rate": tax.rate,
                 "tax_amount": tax.tax_amount
             })
-        
+
+        # -------------------------
+        # Response
+        # -------------------------
         return {
             "status": "success",
             "data": {
@@ -651,19 +725,28 @@ def get_invoice_details():
                 "customer": doc.customer,
                 "customer_name": doc.customer_name,
                 "company": doc.company,
+
                 "posting_date": str(doc.posting_date),
                 "due_date": str(doc.due_date),
+
                 "status": doc.status,
                 "docstatus": doc.docstatus,
+
+                # billing amounts
+                "net_total": doc.net_total,
+                "vat_amount": doc.total_taxes_and_charges,
                 "grand_total": doc.grand_total,
+                "rounded_total": doc.rounded_total or doc.grand_total,
+                "rounding_adjustment": doc.rounding_adjustment or 0,
                 "outstanding_amount": doc.outstanding_amount,
+
                 "items": items,
                 "taxes": taxes
             }
         }
-        
+
     except Exception as e:
-        frappe.log_error("Get Invoice Error", frappe.get_traceback())
+        frappe.log_error("Get Invoice Details Error", frappe.get_traceback())
         return {
             "status": "error",
             "message": str(e)
