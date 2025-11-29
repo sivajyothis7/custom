@@ -1436,73 +1436,51 @@ def submit_sales_invoice():
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_payment_entries_list():
     """
-    API to list all payment entries with filtering and pagination
-    
-    Method: GET
-    URL: /api/method/your_app.api.get_payment_entries_list
-    
-    Query Parameters:
-    - party: Filter by customer name
-    - party_type: Customer/Supplier (default: Customer)
-    - payment_type: Receive/Pay
-    - mode_of_payment: Filter by payment mode
-    - from_date: Start date (YYYY-MM-DD)
-    - to_date: End date (YYYY-MM-DD)
-    - status: Filter by docstatus (0=Draft, 1=Submitted, 2=Cancelled)
-    - limit: Number of entries per page (default: 20)
-    - offset: Starting position (default: 0)
-    - order_by: Sort field (default: posting_date)
-    - order: asc or desc (default: desc)
-    
-    Returns:
-        JSON with list of payment entries
+    API to list only SUBMITTED payment entries.
+    Draft and Cancelled are excluded.
+    Latest entries appear first.
     """
+
     try:
-        filters = {}
-        
-        # Party filters
+        filters = {
+            "docstatus": 1   # ✅ Only Submitted entries
+        }
+
+        # Party filter
         party = frappe.form_dict.get("party")
         if party:
             filters["party"] = party
-        
+
+        # Party type
         party_type = frappe.form_dict.get("party_type", "Customer")
         filters["party_type"] = party_type
-        
-        # Payment type filter
+
+        # Payment type
         payment_type = frappe.form_dict.get("payment_type")
         if payment_type:
             filters["payment_type"] = payment_type
-        
-        # Mode of payment filter
+
+        # Mode of payment
         mode_of_payment = frappe.form_dict.get("mode_of_payment")
         if mode_of_payment:
             filters["mode_of_payment"] = mode_of_payment
-        
-        # Status filter
-        status = frappe.form_dict.get("status")
-        if status is not None:
-            filters["docstatus"] = cint(status)
-        
-        # Date range filters
+
+        # Date range
         from_date = frappe.form_dict.get("from_date")
         to_date = frappe.form_dict.get("to_date")
-        
+
         if from_date and to_date:
             filters["posting_date"] = ["between", [from_date, to_date]]
         elif from_date:
             filters["posting_date"] = [">=", from_date]
         elif to_date:
             filters["posting_date"] = ["<=", to_date]
-        
-        # Pagination
-        limit = cint(frappe.form_dict.get("limit", 20))
-        offset = cint(frappe.form_dict.get("offset", 0))
-        
+
         # Ordering
         order_by = frappe.form_dict.get("order_by", "posting_date")
         order = frappe.form_dict.get("order", "desc")
-        
-        # Get payment entries
+
+        # Fetch ALL submitted records
         payment_entries = frappe.get_all(
             "Payment Entry",
             filters=filters,
@@ -1520,43 +1498,26 @@ def get_payment_entries_list():
                 "mode_of_payment",
                 "reference_no",
                 "reference_date",
-                "docstatus",
                 "creation",
                 "modified",
                 "company"
             ],
-            order_by=f"{order_by} {order}",
-            limit_page_length=limit,
-            limit_start=offset
+            order_by=f"{order_by} {order}, modified desc"
         )
-        
-        # Get total count
-        total_count = frappe.db.count("Payment Entry", filters=filters)
-        
-        # Add status labels
-        for pe in payment_entries:
-            if pe.docstatus == 0:
-                pe["status"] = "Draft"
-            elif pe.docstatus == 1:
-                pe["status"] = "Submitted"
-            elif pe.docstatus == 2:
-                pe["status"] = "Cancelled"
-        
+
         return {
             "status": "success",
-            "count": len(payment_entries),
-            "total": total_count,
-            "limit": limit,
-            "offset": offset,
+            "total": len(payment_entries),
             "data": payment_entries
         }
-        
+
     except Exception as e:
         frappe.log_error("Get Payment Entries Error", frappe.get_traceback())
         return {
             "status": "error",
             "message": str(e)
         }
+
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
@@ -2493,3 +2454,130 @@ def get_customer_billing_and_payments():
             "status": "error",
             "message": str(e)
         }
+
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET"])
+def get_today_sales():
+    """Today's sales invoice total"""
+
+    try:
+        today = frappe.utils.today()
+
+        data = frappe.db.sql("""
+            SELECT
+                COUNT(name) as invoice_count,
+                SUM(grand_total) as total_sales
+            FROM `tabSales Invoice`
+            WHERE
+                posting_date = %s
+                AND docstatus = 1
+        """, today, as_dict=True)[0]
+
+        return {
+            "status": "success",
+            "date": today,
+            "amount": data.total_sales or 0,
+            "invoices": data.invoice_count or 0
+        }
+
+    except Exception as e:
+        frappe.log_error("Today Sales API Error", frappe.get_traceback())
+        return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET"])
+def get_today_collection():
+    """Today's total collection"""
+
+    try:
+        today = frappe.utils.today()
+
+        data = frappe.db.sql("""
+            SELECT
+                COUNT(name) as payment_count,
+                SUM(received_amount) as total_collection
+            FROM `tabPayment Entry`
+            WHERE
+                posting_date = %s
+                AND docstatus = 1
+                AND payment_type = 'Receive'
+        """, today, as_dict=True)[0]
+
+        return {
+            "status": "success",
+            "date": today,
+            "amount": data.total_collection or 0,
+            "payments": data.payment_count or 0
+        }
+
+    except Exception as e:
+        frappe.log_error("Today Collection API Error", frappe.get_traceback())
+        return {"status": "error", "message": str(e)}
+
+
+
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET"])
+def get_today_cash_collection():
+    """Today's CASH collection"""
+
+    try:
+        today = frappe.utils.today()
+
+        data = frappe.db.sql("""
+            SELECT
+                COUNT(name) as payment_count,
+                SUM(received_amount) as cash_collection
+            FROM `tabPayment Entry`
+            WHERE
+                posting_date = %s
+                AND docstatus = 1
+                AND payment_type = 'Receive'
+                AND mode_of_payment = 'Cash'
+        """, today, as_dict=True)[0]
+
+        return {
+            "status": "success",
+            "date": today,
+            "amount": data.cash_collection or 0,
+            "payments": data.payment_count or 0
+        }
+
+    except Exception as e:
+        frappe.log_error("Cash Collection API Error", frappe.get_traceback())
+        return {"status": "error", "message": str(e)}
+
+
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET"])
+def get_today_bank_collection():
+    """Today's BANK collection"""
+
+    try:
+        today = frappe.utils.today()
+
+        data = frappe.db.sql("""
+            SELECT
+                COUNT(name) as payment_count,
+                SUM(received_amount) as bank_collection
+            FROM `tabPayment Entry`
+            WHERE
+                posting_date = %s
+                AND docstatus = 1
+                AND payment_type = 'Receive'
+                AND mode_of_payment = 'Bank Draft'
+        """, today, as_dict=True)[0]
+
+        return {
+            "status": "success",
+            "date": today,
+            "amount": data.bank_collection or 0,
+            "payments": data.payment_count or 0
+        }
+
+    except Exception as e:
+        frappe.log_error("Bank Collection API Error", frappe.get_traceback())
+        return {"status": "error", "message": str(e)}
