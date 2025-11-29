@@ -989,6 +989,7 @@ def create_sales_invoice():
     - Shipping & extra charges
     - Stock update
     - VAT summary response
+    - custom_mode_of_payment field (Cash/Credit/Bank/POS)
     """
 
     try:
@@ -1030,6 +1031,16 @@ def create_sales_invoice():
 
         update_stock = cint(data.get("update_stock", 0))
         target_warehouse = data.get("target_warehouse") or get_default_warehouse(company)
+
+        # NEW: Get custom_mode_of_payment (Cash, Credit, Bank, POS, etc.)
+        custom_mode_of_payment = data.get("custom_mode_of_payment")
+        
+        # Validate mode of payment if provided
+        if custom_mode_of_payment and not frappe.db.exists("Mode of Payment", custom_mode_of_payment):
+            return {
+                "status": "error", 
+                "message": f"Mode of Payment '{custom_mode_of_payment}' not found. Valid options: Cash, Credit, Bank Transfer, etc."
+            }
 
       
         items_data = data.get("items")
@@ -1118,6 +1129,10 @@ def create_sales_invoice():
             if target_warehouse:
                 doc.set_warehouse = target_warehouse
 
+            # NEW: Set custom_mode_of_payment if provided
+            if custom_mode_of_payment:
+                doc.custom_mode_of_payment = custom_mode_of_payment
+
             doc.set("items", invoice_items)
             doc.set("taxes", tax_rows)
 
@@ -1149,6 +1164,10 @@ def create_sales_invoice():
             if target_warehouse:
                 invoice_data["set_warehouse"] = target_warehouse
 
+            # NEW: Add custom_mode_of_payment if provided
+            if custom_mode_of_payment:
+                invoice_data["custom_mode_of_payment"] = custom_mode_of_payment
+
             doc = frappe.get_doc(invoice_data)
             doc.insert(ignore_permissions=True)
             frappe.db.commit()
@@ -1174,6 +1193,9 @@ def create_sales_invoice():
                 "outstanding_amount": doc.outstanding_amount,
 
                 "taxes_and_charges": resolved_tax_template,
+                
+                # NEW: Include custom_mode_of_payment in response
+                "custom_mode_of_payment": doc.get("custom_mode_of_payment"),
 
                 "items": [
                     {
@@ -1206,6 +1228,8 @@ def create_sales_invoice():
         frappe.log_error(frappe.get_traceback(), "Sales Invoice API Error")
         return {"status": "error", "message": str(e)}
 
+
+        
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_invoice_details():
