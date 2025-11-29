@@ -9,6 +9,10 @@ import frappe
 import json
 from frappe.utils import getdate, flt, cint, nowdate, add_days, get_datetime
 from frappe import _
+import frappe
+import json
+from frappe.utils import getdate, flt, cint, nowdate
+from frappe import _
 
 # ==================== AUTHENTICATION APIs ====================
 
@@ -2580,4 +2584,545 @@ def get_today_bank_collection():
 
     except Exception as e:
         frappe.log_error("Bank Collection API Error", frappe.get_traceback())
+        return {"status": "error", "message": str(e)}
+
+
+
+
+
+@frappe.whitelist(allow_guest=False, methods=["POST"])
+def create_sales_return():
+    """
+    Create a Sales Return (Credit Note) against a Sales Invoice.
+    
+    Two methods supported:
+    1. Full return - Return entire invoice
+    2. Partial return - Return specific items with quantities
+    
+    Features:
+    - Auto-creates return invoice with negative quantities
+    - Links to original invoice
+    - Updates stock if original invoice updated stock
+    - Preserves tax template and calculations
+    - Supports custom return reasons
+    """
+    
+    try:
+        data = json.loads(frappe.request.data) if frappe.request.data else frappe.form_dict
+        
+        # Required field
+        original_invoice = data.get("original_invoice")
+        if not original_invoice:
+            return {"status": "error", "message": "original_invoice is required"}
+        
+        # Validate original invoice exists and is submitted
+        if not frappe.db.exists("Sales Invoice", original_invoice):
+            return {"status": "error", "message": f"Sales Invoice '{original_invoice}' not found"}
+        
+        original_doc = frappe.get_doc("Sales Invoice", original_invoice)
+        
+        if original_doc.docstatus != 1:
+            return {
+                "status": "error", 
+                "message": f"Original invoice must be submitted. Current status: {original_doc.docstatus}"
+            }
+        
+        # Check if invoice is already fully returned
+        if original_doc.is_return:
+            return {"status": "error", "message": "Cannot create return against a return invoice"}
+        
+        # Get return date
+        posting_date = getdate(data.get("posting_date") or nowdate())
+        
+        # Validate posting date is not before original invoice date
+        if posting_date < original_doc.posting_date:
+            return {
+                "status": "error",
+                "message": f"Return date cannot be before original invoice date ({original_doc.posting_date})"
+            }
+        
+        # Check if full return or partial return
+        return_items = data.get("items")  # If provided, partial return
+        return_reason = data.get("return_reason", "")
+        
+        # Create return invoice data
+        return_invoice_data = {
+            "doctype": "Sales Invoice",
+            "customer": original_doc.customer,
+            "company": original_doc.company,
+            "posting_date": posting_date,
+            "due_date": posting_date,
+            "is_return": 1,
+            "return_against": original_invoice,
+            "currency": original_doc.currency,
+            "debit_to": original_doc.debit_to,
+            "update_stock": original_doc.update_stock,
+            "conversion_rate": original_doc.conversion_rate,
+            "taxes_and_charges": original_doc.taxes_and_charges,
+            "items": [],
+            "taxes": []
+        }
+        
+        # Add naming series if provided
+        if data.get("naming_series"):
+            return_invoice_data["naming_series"] = data["naming_series"]
+        
+        # Add warehouse if stock update enabled
+        if original_doc.update_stock and original_doc.set_warehouse:
+            return_invoice_data["set_warehouse"] = original_doc.set_warehouse
+        
+        # Process items
+        if return_items:
+            # Partial return - specific items and quantities
+            for return_item in return_items:
+                item_code = return_item.get("item_code")
+                return_qty = flt(return_item.get("qty", 0))
+                
+                if not item_code or return_qty <= 0:
+                    continue
+                
+                # Find original item
+                original_item = None
+                for orig_item in original_doc.items:
+                    if orig_item.item_code == item_code:
+                        original_item = orig_item
+                        break
+                
+                if not original_item:
+                    return {
+                        "status": "error",
+                        "message": f"Item '{item_code}' not found in original invoice"
+                    }
+                
+                # Validate return quantity
+                if return_qty > original_item.qty:
+                    return {
+                        "status": "error",
+                        "message": f"Return qty {return_qty} exceeds original qty {original_item.qty} for item {item_code}"
+                    }
+                
+                # Add return item (negative quantity)
+                return_invoice_data["items"].append({
+                    "item_code": original_item.item_code,
+                    "item_name": original_item.item_name,
+                    "description": original_item.description,
+                    "qty": -return_qty,  # Negative for return
+                    "rate": original_item.rate,
+                    "uom": original_item.uom,
+                    "stock_uom": original_item.stock_uom,
+                    "conversion_factor": original_item.conversion_factor,
+                    "income_account": original_item.income_account,
+                    "cost_center": original_item.cost_center,
+                    "warehouse": original_item.warehouse if original_doc.update_stock else None
+                })
+        else:
+            # Full return - return all items with full quantities
+            for orig_item in original_doc.items:
+                return_invoice_data["items"].append({
+                    "item_code": orig_item.item_code,
+                    "item_name": orig_item.item_name,
+                    "description": orig_item.description,
+                    "qty": -orig_item.qty,  # Negative for return
+                    "rate": orig_item.rate,
+                    "uom": orig_item.uom,
+                    "stock_uom": orig_item.stock_uom,
+                    "conversion_factor": orig_item.conversion_factor,
+                    "income_account": orig_item.income_account,
+                    "cost_center": orig_item.cost_center,
+                    "warehouse": orig_item.warehouse if original_doc.update_stock else None
+                })
+        
+        # Copy taxes from original invoice (will be auto-calculated as negative)
+        for orig_tax in original_doc.taxes:
+            return_invoice_data["taxes"].append({
+                "charge_type": orig_tax.charge_type,
+                "account_head": orig_tax.account_head,
+                "description": orig_tax.description,
+                "rate": orig_tax.rate,
+                "cost_center": orig_tax.cost_center
+            })
+        
+        # Create return invoice
+        return_doc = frappe.get_doc(return_invoice_data)
+        
+        # Add return reason if provided
+        if return_reason:
+            return_doc.add_comment("Comment", f"Return Reason: {return_reason}")
+        
+        return_doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+        
+        # Prepare response
+        return {
+            "status": "success",
+            "message": f"Sales Return {return_doc.name} created successfully",
+            "data": {
+                "return_invoice": return_doc.name,
+                "original_invoice": original_invoice,
+                "customer": return_doc.customer,
+                "company": return_doc.company,
+                "posting_date": str(return_doc.posting_date),
+                "is_return": return_doc.is_return,
+                "return_against": return_doc.return_against,
+                
+                "net_total": return_doc.net_total,
+                "tax_total": return_doc.total_taxes_and_charges,
+                "grand_total": return_doc.grand_total,
+                "outstanding_amount": return_doc.outstanding_amount,
+                
+                "items": [
+                    {
+                        "item_code": i.item_code,
+                        "item_name": i.item_name,
+                        "qty": i.qty,
+                        "rate": i.rate,
+                        "amount": i.amount,
+                        "uom": i.uom
+                    }
+                    for i in return_doc.items
+                ],
+                
+                "taxes": [
+                    {
+                        "description": t.description,
+                        "rate": t.rate,
+                        "tax_amount": t.tax_amount
+                    }
+                    for t in return_doc.taxes
+                ]
+            }
+        }
+        
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.log_error(frappe.get_traceback(), "Sales Return API Error")
+        return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist(allow_guest=False, methods=["POST"])
+def submit_sales_return():
+    """
+    Submit a Sales Return (Credit Note).
+    
+    Features:
+    - Validates return invoice exists and is draft
+    - Submits the return invoice
+    - Updates stock if applicable
+    - Updates outstanding amount of original invoice
+    - Optionally creates refund payment entry
+    
+    Note: Payment entry creation is optional based on create_payment flag
+    """
+    
+    try:
+        data = json.loads(frappe.request.data) if frappe.request.data else frappe.form_dict
+        
+        return_invoice = data.get("return_invoice")
+        if not return_invoice:
+            return {"status": "error", "message": "return_invoice is required"}
+        
+        # Validate return invoice exists
+        if not frappe.db.exists("Sales Invoice", return_invoice):
+            return {"status": "error", "message": f"Sales Invoice '{return_invoice}' not found"}
+        
+        return_doc = frappe.get_doc("Sales Invoice", return_invoice)
+        
+        # Validate it's a return invoice
+        if not return_doc.is_return:
+            return {"status": "error", "message": "This is not a return invoice"}
+        
+        # Validate it's in draft state
+        if return_doc.docstatus != 0:
+            return {
+                "status": "error",
+                "message": f"Return invoice already submitted or cancelled. Status: {return_doc.docstatus}"
+            }
+        
+        # Submit the return invoice
+        return_doc.submit()
+        frappe.db.commit()
+        
+        # Check if payment entry should be created
+        create_payment = data.get("create_payment", False)
+        payment_entry = None
+        
+        if create_payment:
+            # Get payment mode (default to Cash if not specified)
+            mode_of_payment = data.get("mode_of_payment", "Cash")
+            
+            # Validate mode of payment exists
+            if not frappe.db.exists("Mode of Payment", mode_of_payment):
+                return {
+                    "status": "error",
+                    "message": f"Mode of Payment '{mode_of_payment}' not found"
+                }
+            
+            # Get company's receivable account
+            receivable_account = frappe.db.get_value(
+                "Company", return_doc.company, "default_receivable_account"
+            )
+            
+            if not receivable_account:
+                return {
+                    "status": "error",
+                    "message": "Default Receivable Account missing in Company settings"
+                }
+            
+            # Get payment account from mode of payment
+            payment_account = frappe.db.get_value(
+                "Mode of Payment Account",
+                {"parent": mode_of_payment, "company": return_doc.company},
+                "default_account"
+            )
+            
+            if not payment_account:
+                return {
+                    "status": "error",
+                    "message": f"No account configured for Mode of Payment '{mode_of_payment}'"
+                }
+            
+            # Create Payment Entry for refund
+            pe = frappe.get_doc({
+                "doctype": "Payment Entry",
+                "payment_type": "Pay",  # Pay because we're refunding to customer
+                "posting_date": return_doc.posting_date,
+                "company": return_doc.company,
+                "party_type": "Customer",
+                "party": return_doc.customer,
+                
+                "paid_from": payment_account,  # Pay from cash/bank
+                "paid_to": receivable_account,  # Pay to receivable (reduces customer balance)
+                
+                "mode_of_payment": mode_of_payment,
+                
+                "paid_amount": abs(return_doc.grand_total),  # Absolute value
+                "received_amount": abs(return_doc.grand_total),
+                
+                "references": [
+                    {
+                        "reference_doctype": "Sales Invoice",
+                        "reference_name": return_doc.name,
+                        "total_amount": return_doc.grand_total,
+                        "outstanding_amount": return_doc.outstanding_amount,
+                        "exchange_rate": 1,
+                        "allocated_amount": abs(return_doc.grand_total)
+                    }
+                ]
+            })
+            
+            pe.insert(ignore_permissions=True)
+            pe.submit()
+            frappe.db.commit()
+            
+            payment_entry = pe.name
+        
+        # Prepare response
+        return {
+            "status": "success",
+            "message": "Sales Return submitted successfully" + (
+                " with refund payment" if payment_entry else ""
+            ),
+            "data": {
+                "return_invoice": return_doc.name,
+                "original_invoice": return_doc.return_against,
+                "docstatus": return_doc.docstatus,
+                "payment_entry": payment_entry,
+                "grand_total": return_doc.grand_total,
+                "outstanding_amount": return_doc.outstanding_amount
+            }
+        }
+        
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.log_error(frappe.get_traceback(), "Submit Sales Return Error")
+        return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET"])
+def get_sales_return_details():
+    """
+    Get details of a Sales Return invoice.
+    
+    Returns:
+    - Return invoice details
+    - Original invoice reference
+    - Items returned
+    - Tax details
+    - Payment entry (if exists)
+    """
+    
+    try:
+        return_invoice = frappe.form_dict.get("return_invoice")
+        
+        if not return_invoice:
+            return {"status": "error", "message": "return_invoice parameter is required"}
+        
+        if not frappe.db.exists("Sales Invoice", return_invoice):
+            return {"status": "error", "message": f"Sales Invoice '{return_invoice}' not found"}
+        
+        return_doc = frappe.get_doc("Sales Invoice", return_invoice)
+        
+        if not return_doc.is_return:
+            return {"status": "error", "message": "This is not a return invoice"}
+        
+        # Get payment entry if exists
+        payment_entries = frappe.get_all(
+            "Payment Entry Reference",
+            filters={
+                "reference_doctype": "Sales Invoice",
+                "reference_name": return_invoice,
+                "docstatus": 1
+            },
+            fields=["parent as payment_entry"]
+        )
+        
+        return {
+            "status": "success",
+            "data": {
+                "return_invoice": return_doc.name,
+                "original_invoice": return_doc.return_against,
+                "customer": return_doc.customer,
+                "customer_name": return_doc.customer_name,
+                "company": return_doc.company,
+                
+                "posting_date": str(return_doc.posting_date),
+                "due_date": str(return_doc.due_date),
+                
+                "docstatus": return_doc.docstatus,
+                "status": "Draft" if return_doc.docstatus == 0 else "Submitted" if return_doc.docstatus == 1 else "Cancelled",
+                
+                "is_return": return_doc.is_return,
+                "return_against": return_doc.return_against,
+                
+                "net_total": return_doc.net_total,
+                "tax_total": return_doc.total_taxes_and_charges,
+                "grand_total": return_doc.grand_total,
+                "rounded_total": return_doc.rounded_total or return_doc.grand_total,
+                "outstanding_amount": return_doc.outstanding_amount,
+                
+                "update_stock": return_doc.update_stock,
+                
+                "items": [
+                    {
+                        "item_code": i.item_code,
+                        "item_name": i.item_name,
+                        "description": i.description,
+                        "qty": i.qty,
+                        "rate": i.rate,
+                        "amount": i.amount,
+                        "uom": i.uom,
+                        "warehouse": i.warehouse
+                    }
+                    for i in return_doc.items
+                ],
+                
+                "taxes": [
+                    {
+                        "description": t.description,
+                        "charge_type": t.charge_type,
+                        "account_head": t.account_head,
+                        "rate": t.rate,
+                        "tax_amount": t.tax_amount
+                    }
+                    for t in return_doc.taxes
+                ],
+                
+                "payment_entries": [pe["payment_entry"] for pe in payment_entries] if payment_entries else []
+            }
+        }
+        
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "Get Sales Return Details Error")
+        return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET"])
+def get_sales_returns_list():
+    """
+    Get list of all Sales Returns with filters.
+    
+    Filters:
+    - customer: Filter by customer
+    - from_date: Filter returns from this date
+    - to_date: Filter returns to this date
+    - status: Filter by docstatus (0=Draft, 1=Submitted, 2=Cancelled)
+    - original_invoice: Get returns for specific original invoice
+    - limit: Number of records (default 20)
+    - offset: Offset for pagination (default 0)
+    """
+    
+    try:
+        filters = {"is_return": 1}
+        
+        # Customer filter
+        if frappe.form_dict.get("customer"):
+            filters["customer"] = frappe.form_dict.get("customer")
+        
+        # Date range filter
+        if frappe.form_dict.get("from_date"):
+            filters["posting_date"] = [">=", frappe.form_dict.get("from_date")]
+        
+        if frappe.form_dict.get("to_date"):
+            if "posting_date" in filters:
+                filters["posting_date"] = [
+                    [">=", frappe.form_dict.get("from_date")],
+                    ["<=", frappe.form_dict.get("to_date")]
+                ]
+            else:
+                filters["posting_date"] = ["<=", frappe.form_dict.get("to_date")]
+        
+        # Status filter
+        if frappe.form_dict.get("status"):
+            filters["docstatus"] = frappe.form_dict.get("status")
+        
+        # Original invoice filter
+        if frappe.form_dict.get("original_invoice"):
+            filters["return_against"] = frappe.form_dict.get("original_invoice")
+        
+        # Pagination
+        limit = int(frappe.form_dict.get("limit", 20))
+        offset = int(frappe.form_dict.get("offset", 0))
+        
+        # Get returns
+        returns = frappe.get_all(
+            "Sales Invoice",
+            filters=filters,
+            fields=[
+                "name",
+                "customer",
+                "customer_name",
+                "posting_date",
+                "return_against",
+                "grand_total",
+                "outstanding_amount",
+                "docstatus"
+            ],
+            order_by="posting_date desc",
+            limit=limit,
+            start=offset
+        )
+        
+        # Get total count
+        total_count = frappe.db.count("Sales Invoice", filters)
+        
+        # Add status labels
+        for ret in returns:
+            if ret.docstatus == 0:
+                ret["status"] = "Draft"
+            elif ret.docstatus == 1:
+                ret["status"] = "Submitted"
+            else:
+                ret["status"] = "Cancelled"
+        
+        return {
+            "status": "success",
+            "data": returns,
+            "count": len(returns),
+            "total": total_count,
+            "limit": limit,
+            "offset": offset
+        }
+        
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "Get Sales Returns List Error")
         return {"status": "error", "message": str(e)}
