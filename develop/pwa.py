@@ -733,25 +733,20 @@ def build_consolidated_taxes(company):
 @frappe.whitelist(allow_guest=True, methods=["GET"])
 def get_customers_list():
     """
-    API to list all customers with outstanding amount
-    
-    Filters:
-    - customer_group
-    - territory
-    - disabled
+    API: Customers list with calculated outstanding balance
     """
 
     try:
         filters = {}
-        
+
         customer_group = frappe.form_dict.get("customer_group")
         if customer_group:
             filters["customer_group"] = customer_group
-            
+
         territory = frappe.form_dict.get("territory")
         if territory:
             filters["territory"] = territory
-            
+
         disabled = frappe.form_dict.get("disabled")
         if disabled is not None:
             filters["disabled"] = cint(disabled)
@@ -767,19 +762,31 @@ def get_customers_list():
                 "territory",
                 "tax_id",
                 "disabled",
-                "outstanding_amount",   # ✅ Added
                 "creation",
                 "modified"
             ],
             order_by="customer_name asc"
         )
 
+        # --------------------------
+        # GET OUTSTANDING BALANCE
+        # --------------------------
+        for cust in customers:
+            outstanding = frappe.db.sql("""
+                SELECT SUM(outstanding_amount)
+                FROM `tabSales Invoice`
+                WHERE customer = %s
+                AND docstatus = 1
+            """, cust["name"])[0][0]
+
+            cust["outstanding_amount"] = flt(outstanding or 0)
+
         return {
             "status": "success",
             "count": len(customers),
             "data": customers
         }
-        
+
     except Exception as e:
         frappe.log_error("Get Customers Error", frappe.get_traceback())
         return {
