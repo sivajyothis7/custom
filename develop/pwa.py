@@ -3132,44 +3132,22 @@ from frappe import _
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_stock_balance_summary():
-    """
-    Get stock balance summary - the 3 cards at the top:
-    1. Total Items (Unique SKUs)
-    2. Total Quantity (All units)
-    3. Stock Value (At cost price)
-    
-    Optional Query Parameters:
-    - warehouse: Filter by specific warehouse (default: all warehouses)
-    - company: Filter by company (default: default company)
-    
-    Returns:
-    {
-        "status": "success",
-        "data": {
-            "total_items": 7,
-            "total_quantity": 1420,
-            "stock_value": 12110.00,
-            "currency": "SAR"
-        }
-    }
-    """
-    
+
     try:
-        # Get query parameters
         warehouse = frappe.form_dict.get("warehouse")
         company = frappe.form_dict.get("company") or frappe.defaults.get_user_default("Company")
-        
-        # Build conditions
+
         conditions = []
+
         if warehouse:
             conditions.append(f"sle.warehouse = '{warehouse}'")
+
         if company:
-            conditions.append(f"sle.company = '{company}'")
-        
+            conditions.append(f"wh.company = '{company}'")
+
         where_clause = " AND " + " AND ".join(conditions) if conditions else ""
-        
-        # Get stock summary using Stock Ledger Entry
-        summary_query = f"""
+
+        query = f"""
             SELECT 
                 COUNT(DISTINCT sle.item_code) as total_items,
                 SUM(sle.qty_after_transaction) as total_quantity,
@@ -3181,126 +3159,64 @@ def get_stock_balance_summary():
                         warehouse,
                         qty_after_transaction,
                         stock_value,
-                        company,
-                        ROW_NUMBER() OVER (PARTITION BY item_code, warehouse ORDER BY posting_date DESC, posting_time DESC, creation DESC) as rn
+                        ROW_NUMBER() OVER (PARTITION BY item_code, warehouse 
+                                           ORDER BY posting_date DESC, posting_time DESC, creation DESC) as rn
                     FROM `tabStock Ledger Entry`
                     WHERE docstatus < 2
-                    {where_clause}
-                ) as sle
+                ) sle
+            INNER JOIN `tabWarehouse` wh ON wh.name = sle.warehouse
             WHERE sle.rn = 1
-                AND sle.qty_after_transaction > 0
+            AND sle.qty_after_transaction > 0
+            {where_clause}
         """
-        
-        result = frappe.db.sql(summary_query, as_dict=True)
-        
-        if result and result[0]:
-            summary = result[0]
-            
-            # Get company currency
-            currency = "SAR"
-            if company:
-                currency = frappe.db.get_value("Company", company, "default_currency") or "SAR"
-            
-            return {
-                "status": "success",
-                "data": {
-                    "total_items": cint(summary.get("total_items", 0)),
-                    "total_quantity": flt(summary.get("total_quantity", 0), 2),
-                    "stock_value": flt(summary.get("stock_value", 0), 2),
-                    "currency": currency
-                }
-            }
-        else:
-            return {
-                "status": "success",
-                "data": {
-                    "total_items": 0,
-                    "total_quantity": 0.0,
-                    "stock_value": 0.0,
-                    "currency": "SAR"
-                }
-            }
-            
-    except Exception as e:
-        frappe.log_error(frappe.get_traceback(), "Get Stock Balance Summary Error")
+
+        result = frappe.db.sql(query, as_dict=True)
+
+        currency = frappe.db.get_value("Company", company, "default_currency") if company else "SAR"
+
+        summary = result[0] if result else {}
+
         return {
-            "status": "error",
-            "message": str(e)
+            "status": "success",
+            "data": {
+                "total_items": cint(summary.get("total_items", 0)),
+                "total_quantity": flt(summary.get("total_quantity", 0), 2),
+                "stock_value": flt(summary.get("stock_value", 0), 2),
+                "currency": currency or "SAR"
+            }
         }
+
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "Stock Summary Error")
+        return {"status": "error", "message": str(e)}
+
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_stock_levels():
-    """
-    Get detailed stock levels for all items with current stock.
-    
-    Query Parameters:
-    - warehouse: Filter by warehouse (optional)
-    - company: Filter by company (optional, default: user's default company)
-    - item_code: Search by item code (optional, partial match)
-    - item_name: Search by item name (optional, partial match)
-    - search: Search in both item_code and item_name (optional)
-    - limit: Number of records (default: 100)
-    - offset: Pagination offset (default: 0)
-    
-    Returns:
-    {
-        "status": "success",
-        "data": {
-            "items": [
-                {
-                    "item_code": "ITEM001",
-                    "item_name": "Premium Coffee Beans 1kg",
-                    "uom": "Kg",
-                    "warehouse": "MAIN",
-                    "stock_qty": 50.0,
-                    "cost_price": 80.00,
-                    "sale_price": 120.00,
-                    "stock_value": 4000.00,
-                    "status": "In Stock"
-                }
-            ],
-            "pagination": {
-                "limit": 100,
-                "offset": 0,
-                "count": 7,
-                "total": 7
-            }
-        }
-    }
-    """
-    
+
     try:
-        # Get query parameters
         warehouse = frappe.form_dict.get("warehouse")
         company = frappe.form_dict.get("company") or frappe.defaults.get_user_default("Company")
         item_code_search = frappe.form_dict.get("item_code")
         item_name_search = frappe.form_dict.get("item_name")
         general_search = frappe.form_dict.get("search")
-        limit = cint(frappe.form_dict.get("limit", 100))
-        offset = cint(frappe.form_dict.get("offset", 0))
-        
-        # Build conditions
+
         conditions = ["sle.qty_after_transaction > 0"]
-        
+
         if warehouse:
             conditions.append(f"sle.warehouse = '{warehouse}'")
-        
         if company:
-            conditions.append(f"sle.company = '{company}'")
-        
+            conditions.append(f"wh.company = '{company}'")
         if item_code_search:
             conditions.append(f"item.item_code LIKE '%{item_code_search}%'")
-        
         if item_name_search:
             conditions.append(f"item.item_name LIKE '%{item_name_search}%'")
-        
         if general_search:
             conditions.append(f"(item.item_code LIKE '%{general_search}%' OR item.item_name LIKE '%{general_search}%')")
-        
+
         where_clause = " AND ".join(conditions)
-        
-        # Get stock levels with item details
+
         query = f"""
             SELECT 
                 item.item_code,
@@ -3311,10 +3227,7 @@ def get_stock_levels():
                 item.valuation_rate as cost_price,
                 item.standard_rate as sale_price,
                 sle.stock_value,
-                CASE 
-                    WHEN sle.qty_after_transaction > 0 THEN 'In Stock'
-                    ELSE 'Out of Stock'
-                END as status
+                CASE WHEN sle.qty_after_transaction > 0 THEN 'In Stock' ELSE 'Out of Stock' END status
             FROM 
                 (
                     SELECT 
@@ -3322,75 +3235,40 @@ def get_stock_levels():
                         warehouse,
                         qty_after_transaction,
                         stock_value,
-                        company,
-                        ROW_NUMBER() OVER (PARTITION BY item_code, warehouse ORDER BY posting_date DESC, posting_time DESC, creation DESC) as rn
+                        ROW_NUMBER() OVER (PARTITION BY item_code, warehouse 
+                                           ORDER BY posting_date DESC, posting_time DESC, creation DESC) rn
                     FROM `tabStock Ledger Entry`
                     WHERE docstatus < 2
-                ) as sle
-            INNER JOIN `tabItem` as item ON sle.item_code = item.name
-            WHERE sle.rn = 1
-                AND {where_clause}
+                ) sle
+            INNER JOIN `tabItem` item ON item.name = sle.item_code
+            INNER JOIN `tabWarehouse` wh ON wh.name = sle.warehouse
+            WHERE sle.rn = 1 AND {where_clause}
             ORDER BY item.item_code ASC
-            LIMIT {limit} OFFSET {offset}
         """
-        
+
         items = frappe.db.sql(query, as_dict=True)
-        
-        # Get total count for pagination
-        count_query = f"""
-            SELECT COUNT(*) as total
-            FROM 
-                (
-                    SELECT 
-                        item_code,
-                        warehouse,
-                        qty_after_transaction,
-                        company,
-                        ROW_NUMBER() OVER (PARTITION BY item_code, warehouse ORDER BY posting_date DESC, posting_time DESC, creation DESC) as rn
-                    FROM `tabStock Ledger Entry`
-                    WHERE docstatus < 2
-                ) as sle
-            INNER JOIN `tabItem` as item ON sle.item_code = item.name
-            WHERE sle.rn = 1
-                AND {where_clause}
-        """
-        
-        total_count = frappe.db.sql(count_query, as_dict=True)[0]['total']
-        
-        # Format the response
-        formatted_items = []
-        for item in items:
-            formatted_items.append({
-                "item_code": item.get("item_code"),
-                "item_name": item.get("item_name"),
-                "uom": item.get("uom"),
-                "warehouse": item.get("warehouse"),
-                "stock_qty": flt(item.get("stock_qty", 0), 2),
-                "cost_price": flt(item.get("cost_price", 0), 2),
-                "sale_price": flt(item.get("sale_price", 0), 2),
-                "stock_value": flt(item.get("stock_value", 0), 2),
-                "status": item.get("status", "Out of Stock")
-            })
-        
+
         return {
             "status": "success",
             "data": {
-                "items": formatted_items,
-                "pagination": {
-                    "limit": limit,
-                    "offset": offset,
-                    "count": len(formatted_items),
-                    "total": cint(total_count)
-                }
+                "items": [{
+                    "item_code": i.item_code,
+                    "item_name": i.item_name,
+                    "uom": i.uom,
+                    "warehouse": i.warehouse,
+                    "stock_qty": flt(i.stock_qty, 2),
+                    "cost_price": flt(i.cost_price, 2),
+                    "sale_price": flt(i.sale_price, 2),
+                    "stock_value": flt(i.stock_value, 2),
+                    "status": i.status
+                } for i in items]
             }
         }
-        
+
     except Exception as e:
-        frappe.log_error(frappe.get_traceback(), "Get Stock Levels Error")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        frappe.log_error(frappe.get_traceback(), "Stock Level Error")
+        return {"status": "error", "message": str(e)}
+
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
