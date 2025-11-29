@@ -14,7 +14,7 @@ import json
 from frappe.utils import getdate, flt, cint, nowdate
 from frappe import _
 
-# ==================== AUTHENTICATION APIs ====================
+
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def login():
@@ -46,7 +46,6 @@ def login():
                 "message": "Email and password are required"
             }
         
-        # Authenticate user
         try:
             frappe.auth.check_password(email, password)
         except frappe.exceptions.AuthenticationError:
@@ -55,7 +54,6 @@ def login():
                 "message": "Invalid email or password"
             }
         
-        # Get user details
         user = frappe.get_doc("User", email)
         
         if user.enabled == 0:
@@ -64,11 +62,9 @@ def login():
                 "message": "User account is disabled"
             }
         
-        # Generate API token
         api_key = user.api_key
         api_secret = None
         
-        # Generate new API key and secret if not exists
         if not api_key:
             api_key = frappe.generate_hash(length=15)
             api_secret = frappe.generate_hash(length=15)
@@ -78,10 +74,8 @@ def login():
             user.save(ignore_permissions=True)
             frappe.db.commit()
         else:
-            # Get existing API secret
             api_secret = user.get_password('api_secret')
         
-        # Create session token (alternative to API key/secret)
         token = generate_custom_token(email)
         
         return {
@@ -94,7 +88,7 @@ def login():
                 "token": token,
                 "api_key": api_key,
                 "api_secret": api_secret,
-                "expires_in": 86400  # 24 hours
+                "expires_in": 86400 
             }
         }
         
@@ -175,7 +169,6 @@ def logout():
         JSON with logout confirmation
     """
     try:
-        # Get token from Authorization header
         auth_header = frappe.get_request_header("Authorization")
         if auth_header and auth_header.startswith("Bearer "):
             token = auth_header.split(" ")[1]
@@ -201,15 +194,13 @@ def generate_custom_token(user_email):
     token = secrets.token_urlsafe(32)
     expiry = datetime.now() + timedelta(hours=24)
     
-    # Store token in custom doctype or cache
-    # For simplicity, using frappe.cache
     frappe.cache().set_value(
         f"auth_token:{token}",
         {
             "user": user_email,
             "expiry": expiry.isoformat()
         },
-        expires_in_sec=86400  # 24 hours
+        expires_in_sec=86400  
     )
     
     return token
@@ -235,7 +226,6 @@ def invalidate_custom_token(token):
     frappe.cache().delete_value(f"auth_token:{token}")
 
 
-# ==================== ITEM APIs ====================
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_items_list():
@@ -262,7 +252,6 @@ def get_items_list():
     try:
         filters = {}
         
-        # Apply filters
         item_group = frappe.form_dict.get("item_group")
         if item_group:
             filters["item_group"] = item_group
@@ -279,20 +268,16 @@ def get_items_list():
         if disabled is not None:
             filters["disabled"] = cint(disabled)
         
-        # Search functionality
         search = frappe.form_dict.get("search")
         if search:
             filters["item_code"] = ["like", f"%{search}%"]
         
-        # Pagination
         limit = cint(frappe.form_dict.get("limit", 20))
         offset = cint(frappe.form_dict.get("offset", 0))
         
-        # Ordering
         order_by = frappe.form_dict.get("order_by", "item_name")
         order = frappe.form_dict.get("order", "asc")
         
-        # Get items
         items = frappe.get_all(
             "Item",
             filters=filters,
@@ -317,7 +302,6 @@ def get_items_list():
             limit_start=offset
         )
         
-        # Get total count
         total_count = frappe.db.count("Item", filters=filters)
         
         return {
@@ -368,7 +352,6 @@ def get_item_details():
         
         item = frappe.get_doc("Item", item_code)
         
-        # Get UOM conversions
         uom_conversions = []
         for uom in item.uoms:
             uom_conversions.append({
@@ -376,7 +359,6 @@ def get_item_details():
                 "conversion_factor": uom.conversion_factor
             })
         
-        # Get stock levels by warehouse
         stock_levels = []
         if item.is_stock_item:
             bins = frappe.get_all(
@@ -392,7 +374,6 @@ def get_item_details():
             )
             stock_levels = bins
         
-        # Get item prices
         item_prices = frappe.get_all(
             "Item Price",
             filters={"item_code": item_code},
@@ -554,7 +535,6 @@ def update_item():
         
         item_doc = frappe.get_doc("Item", item_code)
         
-        # Update fields if provided
         updatable_fields = [
             "item_name", "description", "standard_rate", 
             "valuation_rate", "disabled"
@@ -753,19 +733,14 @@ def build_consolidated_taxes(company):
 @frappe.whitelist(allow_guest=True, methods=["GET"])
 def get_customers_list():
     """
-    API to list all customers
+    API to list all customers with outstanding amount
     
-    Method: GET
-    URL: /api/method/your_app.api.get_customers_list
-    
-    Query Parameters:
-    - customer_group: Filter by customer group
-    - territory: Filter by territory
-    - disabled: 0 or 1
-    
-    Returns:
-        JSON with list of customers
+    Filters:
+    - customer_group
+    - territory
+    - disabled
     """
+
     try:
         filters = {}
         
@@ -780,7 +755,7 @@ def get_customers_list():
         disabled = frappe.form_dict.get("disabled")
         if disabled is not None:
             filters["disabled"] = cint(disabled)
-        
+
         customers = frappe.get_all(
             "Customer",
             filters=filters,
@@ -792,12 +767,13 @@ def get_customers_list():
                 "territory",
                 "tax_id",
                 "disabled",
+                "outstanding_amount",   # ✅ Added
                 "creation",
                 "modified"
             ],
             order_by="customer_name asc"
         )
-        
+
         return {
             "status": "success",
             "count": len(customers),
@@ -938,7 +914,6 @@ def get_sales_invoice_list():
     if start_date and end_date:
         filters["posting_date"] = ["between", [start_date, end_date]]
 
-    # Fetch ALL invoices ordered by latest first
     invoice_names = frappe.get_all(
         "Sales Invoice",
         filters=filters,
@@ -1030,10 +1005,8 @@ def create_sales_invoice():
         update_stock = cint(data.get("update_stock", 0))
         target_warehouse = data.get("target_warehouse") or get_default_warehouse(company)
 
-        # NEW: Get custom_mode_of_payment (Cash, Credit, Bank, POS, etc.)
         custom_mode_of_payment = data.get("custom_mode_of_payment")
         
-        # Validate mode of payment if provided
         if custom_mode_of_payment and not frappe.db.exists("Mode of Payment", custom_mode_of_payment):
             return {
                 "status": "error", 
@@ -1127,7 +1100,6 @@ def create_sales_invoice():
             if target_warehouse:
                 doc.set_warehouse = target_warehouse
 
-            # NEW: Set custom_mode_of_payment if provided
             if custom_mode_of_payment:
                 doc.custom_mode_of_payment = custom_mode_of_payment
 
@@ -1162,7 +1134,6 @@ def create_sales_invoice():
             if target_warehouse:
                 invoice_data["set_warehouse"] = target_warehouse
 
-            # NEW: Add custom_mode_of_payment if provided
             if custom_mode_of_payment:
                 invoice_data["custom_mode_of_payment"] = custom_mode_of_payment
 
@@ -1192,7 +1163,6 @@ def create_sales_invoice():
 
                 "taxes_and_charges": resolved_tax_template,
                 
-                # NEW: Include custom_mode_of_payment in response
                 "custom_mode_of_payment": doc.get("custom_mode_of_payment"),
 
                 "items": [
@@ -1435,7 +1405,6 @@ def submit_sales_invoice():
 
 
 
-# ==================== PAYMENT ENTRY APIs ====================
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_payment_entries_list():
@@ -1447,29 +1416,24 @@ def get_payment_entries_list():
 
     try:
         filters = {
-            "docstatus": 1   # ✅ Only Submitted entries
+            "docstatus": 1   
         }
 
-        # Party filter
         party = frappe.form_dict.get("party")
         if party:
             filters["party"] = party
 
-        # Party type
         party_type = frappe.form_dict.get("party_type", "Customer")
         filters["party_type"] = party_type
 
-        # Payment type
         payment_type = frappe.form_dict.get("payment_type")
         if payment_type:
             filters["payment_type"] = payment_type
 
-        # Mode of payment
         mode_of_payment = frappe.form_dict.get("mode_of_payment")
         if mode_of_payment:
             filters["mode_of_payment"] = mode_of_payment
 
-        # Date range
         from_date = frappe.form_dict.get("from_date")
         to_date = frappe.form_dict.get("to_date")
 
@@ -1480,11 +1444,9 @@ def get_payment_entries_list():
         elif to_date:
             filters["posting_date"] = ["<=", to_date]
 
-        # Ordering
         order_by = frappe.form_dict.get("order_by", "posting_date")
         order = frappe.form_dict.get("order", "desc")
 
-        # Fetch ALL submitted records
         payment_entries = frappe.get_all(
             "Payment Entry",
             filters=filters,
@@ -1555,7 +1517,6 @@ def get_payment_entry_details():
         
         pe = frappe.get_doc("Payment Entry", payment_entry_name)
         
-        # Get references (invoices)
         references = []
         for ref in pe.references:
             references.append({
@@ -1567,7 +1528,6 @@ def get_payment_entry_details():
                 "exchange_rate": ref.exchange_rate
             })
         
-        # Get deductions if any
         deductions = []
         if hasattr(pe, 'deductions'):
             for ded in pe.deductions:
@@ -1669,7 +1629,6 @@ def create_payment_entry():
     try:
         data = json.loads(frappe.request.data) if frappe.request.data else frappe.form_dict
         
-        # Validate required fields
         required_fields = ["party_type", "party", "payment_type", "paid_amount", "mode_of_payment"]
         for field in required_fields:
             if not data.get(field):
@@ -1683,14 +1642,12 @@ def create_payment_entry():
         payment_type = data.get("payment_type")
         company = data.get("company") or frappe.defaults.get_user_default("Company")
         
-        # Validate party exists
         if not frappe.db.exists(party_type, party):
             return {
                 "status": "error",
                 "message": f"{party_type} '{party}' not found"
             }
         
-        # Get accounts based on payment type
         if payment_type == "Receive":
             receivable_account = frappe.db.get_value(
                 "Company", company, "default_receivable_account"
@@ -1712,7 +1669,6 @@ def create_payment_entry():
                 }
             paid_from = payable_account
         
-        # Get payment account from mode of payment
         payment_account = frappe.db.get_value(
             "Mode of Payment Account",
             {"parent": data.get("mode_of_payment"), "company": company},
@@ -1727,7 +1683,6 @@ def create_payment_entry():
         
         paid_to = payment_account if payment_type == "Receive" else receivable_account or payable_account
         
-        # Create payment entry
         pe = frappe.get_doc({
             "doctype": "Payment Entry",
             "payment_type": payment_type,
@@ -1748,7 +1703,6 @@ def create_payment_entry():
             "remarks": data.get("remarks", "Payment Entry created via API")
         })
         
-        # Add invoice references if provided
         invoices = data.get("invoices", [])
         total_allocated = 0
         
@@ -1759,20 +1713,17 @@ def create_payment_entry():
             if not invoice_name:
                 continue
             
-            # Determine reference doctype based on payment type
             if payment_type == "Receive":
                 ref_doctype = "Sales Invoice"
             else:
                 ref_doctype = "Purchase Invoice"
             
-            # Validate invoice exists
             if not frappe.db.exists(ref_doctype, invoice_name):
                 return {
                     "status": "error",
                     "message": f"{ref_doctype} '{invoice_name}' not found"
                 }
             
-            # Get invoice details
             inv = frappe.get_doc(ref_doctype, invoice_name)
             
             if inv.docstatus != 1:
@@ -1781,7 +1732,6 @@ def create_payment_entry():
                     "message": f"{ref_doctype} '{invoice_name}' is not submitted"
                 }
             
-            # Add reference
             pe.append("references", {
                 "reference_doctype": ref_doctype,
                 "reference_name": invoice_name,
@@ -1793,17 +1743,14 @@ def create_payment_entry():
             
             total_allocated += allocated_amount
         
-        # Validate total allocated amount
         if total_allocated > flt(data.get("paid_amount")):
             return {
                 "status": "error",
                 "message": f"Total allocated amount ({total_allocated}) exceeds paid amount ({data.get('paid_amount')})"
             }
         
-        # Insert payment entry
         pe.insert(ignore_permissions=True)
         
-        # Submit if requested
         if data.get("submit", False):
             pe.submit()
         
@@ -1901,7 +1848,6 @@ def submit_payment_entry():
         }
 
 
-# ==================== ACCOUNTS RECEIVABLE APIs ====================
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_accounts_receivable_summary():
@@ -1936,16 +1882,13 @@ def get_accounts_receivable_summary():
         as_on_date = frappe.form_dict.get("as_on_date", nowdate())
         ageing_based_on = frappe.form_dict.get("ageing_based_on", "posting_date")
         
-        # Ageing ranges
         range1 = cint(frappe.form_dict.get("range1", 30))
         range2 = cint(frappe.form_dict.get("range2", 60))
         range3 = cint(frappe.form_dict.get("range3", 90))
         
-        # Pagination
         limit = cint(frappe.form_dict.get("limit", 20))
         offset = cint(frappe.form_dict.get("offset", 0))
         
-        # Get all outstanding invoices
         outstanding_invoices = frappe.db.sql("""
             SELECT 
                 si.customer as party,
@@ -1973,7 +1916,6 @@ def get_accounts_receivable_summary():
             "customer": customer
         }, as_dict=True)
         
-        # Group by customer and calculate ageing
         customer_summary = {}
         
         for inv in outstanding_invoices:
@@ -1997,7 +1939,6 @@ def get_accounts_receivable_summary():
             
             customer_summary[party]["total_outstanding"] += outstanding
             
-            # Categorize by age
             if age_days <= range1:
                 customer_summary[party][f"range_0_{range1}"] += outstanding
             elif age_days <= range2:
@@ -2016,17 +1957,13 @@ def get_accounts_receivable_summary():
                 "age_days": age_days
             })
         
-        # Convert to list and apply pagination
         customer_list = list(customer_summary.values())
         total_count = len(customer_list)
         
-        # Sort by total outstanding (descending)
         customer_list.sort(key=lambda x: x["total_outstanding"], reverse=True)
         
-        # Apply pagination
         paginated_list = customer_list[offset:offset + limit]
         
-        # Calculate totals
         grand_total = sum(c["total_outstanding"] for c in customer_list)
         
         return {
@@ -2094,10 +2031,8 @@ def get_customer_receivable_details():
         as_on_date = frappe.form_dict.get("as_on_date", nowdate())
         include_payments = frappe.form_dict.get("include_payments", "true").lower() == "true"
         
-        # Get customer details
         customer_doc = frappe.get_doc("Customer", customer)
         
-        # Get outstanding invoices
         outstanding_invoices = frappe.db.sql("""
             SELECT 
                 name,
@@ -2117,7 +2052,6 @@ def get_customer_receivable_details():
         
         total_outstanding = sum(flt(inv.outstanding_amount) for inv in outstanding_invoices)
         
-        # Get payment history if requested
         payment_history = []
         if include_payments:
             payments = frappe.db.sql("""
@@ -2139,7 +2073,6 @@ def get_customer_receivable_details():
             """, (customer, company), as_dict=True)
             
             for payment in payments:
-                # Get invoice references
                 refs = frappe.db.sql("""
                     SELECT reference_name, allocated_amount
                     FROM `tabPayment Entry Reference`
@@ -2149,7 +2082,6 @@ def get_customer_receivable_details():
                 payment["references"] = refs
                 payment_history.append(payment)
         
-        # Get all invoices (including paid)
         all_invoices = frappe.db.sql("""
             SELECT 
                 name,
@@ -3124,10 +3056,6 @@ def get_sales_returns_list():
 
 
 
-import frappe
-import json
-from frappe.utils import flt, cint
-from frappe import _
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
