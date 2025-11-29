@@ -910,22 +910,18 @@ def get_warehouse_list(company=None):
 @frappe.whitelist()
 def get_sales_invoice_list():
     """
-    Fetch Sales Invoice list using URL query parameters.
-    Supports:
+    Fetch complete Sales Invoice list (no limit).
+    Latest invoices appear first.
+    Supports filters:
     - customer
     - status
     - start_date, end_date
-    - limit, offset
-    Also returns VAT (tax total) separately.
     """
 
     customer = frappe.form_dict.get("customer")
     status = frappe.form_dict.get("status")
     start_date = frappe.form_dict.get("start_date")
     end_date = frappe.form_dict.get("end_date")
-
-    limit = cint(frappe.form_dict.get("limit", 50))
-    offset = cint(frappe.form_dict.get("offset", 0))
 
     filters = {}
 
@@ -938,13 +934,12 @@ def get_sales_invoice_list():
     if start_date and end_date:
         filters["posting_date"] = ["between", [start_date, end_date]]
 
+    # Fetch ALL invoices ordered by latest first
     invoice_names = frappe.get_all(
         "Sales Invoice",
         filters=filters,
         fields=["name"],
-        order_by="posting_date desc",
-        limit_page_length=limit,
-        limit_start=offset
+        order_by="posting_date desc, modified desc"
     )
 
     invoice_list = []
@@ -960,7 +955,7 @@ def get_sales_invoice_list():
             "due_date": doc.due_date,
 
             "net_total": doc.net_total,
-            "tax_total": doc.total_taxes_and_charges,      
+            "tax_total": doc.total_taxes_and_charges,
             "grand_total": doc.grand_total,
             "rounded_total": doc.rounded_total or doc.grand_total,
 
@@ -973,7 +968,6 @@ def get_sales_invoice_list():
         "count": len(invoice_list),
         "invoices": invoice_list
     }
-
 
 
 
@@ -1229,7 +1223,7 @@ def create_sales_invoice():
         return {"status": "error", "message": str(e)}
 
 
-        
+
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_invoice_details():
@@ -2362,6 +2356,139 @@ def get_outstanding_invoices_for_payment():
         
     except Exception as e:
         frappe.log_error("Get Outstanding Invoices Error", frappe.get_traceback())
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET"])
+def get_customer_billing_and_payments():
+    """
+    Combined API:
+    - All Submitted Sales Invoices (including Paid)
+    - Submitted Payment Entries
+    
+    Filters:
+    - customer
+    - from_date
+    - to_date
+
+    Returns:
+    - Full ledger list (no pagination)
+    - Total Billed
+    - Total Paid
+    - Total Outstanding
+    """
+
+    try:
+        customer = frappe.form_dict.get("customer")
+        from_date = frappe.form_dict.get("from_date")
+        to_date = frappe.form_dict.get("to_date")
+
+        date_filter = None
+        if from_date and to_date:
+            date_filter = ["between", [from_date, to_date]]
+        elif from_date:
+            date_filter = [">=", from_date]
+        elif to_date:
+            date_filter = ["<=", to_date]
+
+        # --------------------------
+        # SALES INVOICES
+        # --------------------------
+        inv_filters = {"docstatus": 1}
+
+        if customer:
+            inv_filters["customer"] = customer
+        if date_filter:
+            inv_filters["posting_date"] = date_filter
+
+        invoices = frappe.get_all(
+            "Sales Invoice",
+            filters=inv_filters,
+            fields=[
+                "name", "posting_date", "customer",
+                "grand_total", "outstanding_amount",
+                "due_date", "status"
+            ]
+        )
+
+        # --------------------------
+        # PAYMENT ENTRIES
+        # --------------------------
+        pay_filters = {
+            "party_type": "Customer",
+            "docstatus": 1
+        }
+
+        if customer:
+            pay_filters["party"] = customer
+        if date_filter:
+            pay_filters["posting_date"] = date_filter
+
+        payments = frappe.get_all(
+            "Payment Entry",
+            filters=pay_filters,
+            fields=[
+                "name", "posting_date", "party",
+                "paid_amount", "received_amount",
+                "mode_of_payment", "payment_type"
+            ]
+        )
+
+        # --------------------------
+        # TOTALS
+        # --------------------------
+        total_billed = 0
+        total_paid = 0
+        total_outstanding = 0
+
+        for inv in invoices:
+            total_billed += flt(inv["grand_total"])
+            total_outstanding += flt(inv["outstanding_amount"])
+            total_paid += flt(inv["grand_total"]) - flt(inv["outstanding_amount"])
+
+            inv["source"] = "Invoice"
+            inv["amount"] = inv["grand_total"]
+            inv["date"] = inv["posting_date"]
+            inv["invoice_status"] = inv["status"]
+
+        for pay in payments:
+            paid = flt(pay["received_amount"] or pay["paid_amount"])
+            total_paid += paid
+
+            pay["source"] = "Payment"
+            pay["customer"] = pay["party"]
+            pay["amount"] = paid
+            pay["date"] = pay["posting_date"]
+            pay["invoice_status"] = None
+
+        # --------------------------
+        # FINAL COMBINED LIST
+        # --------------------------
+        combined = invoices + payments
+        combined.sort(key=lambda x: x["date"], reverse=True)
+
+        return {
+            "status": "success",
+            "filters": {
+                "customer": customer,
+                "from_date": from_date,
+                "to_date": to_date
+            },
+            "summary": {
+                "total_billed": total_billed,
+                "total_paid": total_paid,
+                "total_outstanding": total_outstanding
+            },
+            "total_records": len(combined),
+            "data": combined
+        }
+
+    except Exception as e:
+        frappe.log_error("Combined Billing API Error", frappe.get_traceback())
         return {
             "status": "error",
             "message": str(e)
