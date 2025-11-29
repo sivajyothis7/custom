@@ -893,16 +893,11 @@ def get_warehouse_list(company=None):
         "warehouses": warehouses
     }
 
-
-@frappe.whitelist()
+@frappe.whitelist(allow_guest=True)
 def get_sales_invoice_list():
     """
-    Fetch complete Sales Invoice list (no limit).
-    Latest invoices appear first.
-    Supports filters:
-    - customer
-    - status
-    - start_date, end_date
+    Fetch Sales Invoice list with DIRECT PDF download URL
+    Print Format: Sales Invoice PF
     """
 
     customer = frappe.form_dict.get("customer")
@@ -928,10 +923,24 @@ def get_sales_invoice_list():
         order_by="posting_date desc, modified desc"
     )
 
+    base_url = frappe.utils.get_url()
     invoice_list = []
+
+    # ✅ Encode the format safely
+    print_format = frappe.utils.quote("Sales Invoice PF")
 
     for inv in invoice_names:
         doc = frappe.get_doc("Sales Invoice", inv.name)
+
+        # ✅ DIRECT DOWNLOAD PDF URL
+        pdf_url = (
+            f"{base_url}/api/method/frappe.utils.print_format.download_pdf?"
+            f"doctype=Sales%20Invoice"
+            f"&name={doc.name}"
+            f"&format={print_format}"
+            f"&no_letterhead=0"
+            f"&download=1"
+        )
 
         invoice_list.append({
             "name": doc.name,
@@ -939,23 +948,23 @@ def get_sales_invoice_list():
             "company": doc.company,
             "posting_date": doc.posting_date,
             "due_date": doc.due_date,
-
             "net_total": doc.net_total,
             "tax_total": doc.total_taxes_and_charges,
             "grand_total": doc.grand_total,
             "rounded_total": doc.rounded_total or doc.grand_total,
-
             "outstanding_amount": doc.outstanding_amount,
-            "status": doc.status
+            "status": doc.status,
+
+            # ✅ PDF file download link
+            "pdf_url": pdf_url
         })
 
     return {
         "status_code": 200,
+        "print_format": "Sales Invoice PF",
         "count": len(invoice_list),
         "invoices": invoice_list
     }
-
-
 
 
 
