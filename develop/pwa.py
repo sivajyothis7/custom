@@ -1438,14 +1438,15 @@ def submit_sales_invoice():
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_payment_entries_list():
     """
-    API to list only SUBMITTED payment entries.
-    Draft and Cancelled are excluded.
+    API to list payment entries.
+    Draft and Submitted included.
+    Cancelled excluded.
     Latest entries appear first.
     """
 
     try:
         filters = {
-            "docstatus": 1   
+            "docstatus": ["!=", 2]   # ✅ Exclude Cancelled only
         }
 
         party = frappe.form_dict.get("party")
