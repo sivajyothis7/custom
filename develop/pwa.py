@@ -1218,10 +1218,8 @@ def create_sales_invoice():
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_invoice_details():
     """
-    API to get Sales Invoice details (query-based)
-    
-    Usage:
-    GET /api/method/develop.api.get_invoice_details?invoice_name=SINV-00010
+    API to get Sales Invoice details with direct PDF download link
+    Print Format: Sales Invoice PF
     """
 
     try:
@@ -1241,7 +1239,6 @@ def get_invoice_details():
 
         doc = frappe.get_doc("Sales Invoice", invoice_name)
 
-       
         items = []
         for item in doc.items:
             items.append({
@@ -1266,7 +1263,20 @@ def get_invoice_details():
                 "tax_amount": tax.tax_amount
             })
 
-    
+       
+        base_url = frappe.utils.get_url()
+        print_format = frappe.utils.quote("Sales Invoice PF")
+
+        pdf_url = (
+            f"{base_url}/api/method/frappe.utils.print_format.download_pdf?"
+            f"doctype=Sales%20Invoice"
+            f"&name={doc.name}"
+            f"&format={print_format}"
+            f"&no_letterhead=0"
+            f"&download=1"
+        )
+
+      
         return {
             "status": "success",
             "data": {
@@ -1289,7 +1299,9 @@ def get_invoice_details():
                 "outstanding_amount": doc.outstanding_amount,
 
                 "items": items,
-                "taxes": taxes
+                "taxes": taxes,
+
+                "pdf_url": pdf_url
             }
         }
 
@@ -1299,6 +1311,7 @@ def get_invoice_details():
             "status": "error",
             "message": str(e)
         }
+
 
 
 @frappe.whitelist(allow_guest=False, methods=["POST"])
