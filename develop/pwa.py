@@ -870,6 +870,116 @@ def create_customer():
         }
 
 
+@frappe.whitelist(allow_guest=False, methods=["POST"])
+def create_customer_address():
+    """
+    Create Address for Customer according to custom mandatory fields.
+
+    Required Fields:
+    - customer
+    - address_title
+    - address_line1
+    - custom_building_number
+    - custom_area
+    - country
+    - pincode
+    """
+
+    try:
+        data = json.loads(frappe.request.data) if frappe.request.data else frappe.form_dict
+
+        # -------------------------
+        # REQUIRED FIELDS
+        # -------------------------
+        customer = data.get("customer")
+        address_title = data.get("address_title")
+        address_line1 = data.get("address_line1")
+        building = data.get("custom_building_number")
+        area = data.get("custom_area")
+        country = data.get("country")
+        pincode = data.get("pincode")
+
+        # -------------------------
+        # VALIDATION
+        # -------------------------
+        if not customer:
+            return {"status": "error", "message": "customer is required"}
+
+        if not frappe.db.exists("Customer", customer):
+            return {"status": "error", "message": f"Customer '{customer}' not found"}
+
+        missing = []
+        if not address_title: missing.append("address_title")
+        if not address_line1: missing.append("address_line1")
+        if not building: missing.append("custom_building_number")
+        if not area: missing.append("custom_area")
+        if not country: missing.append("country")
+        if not pincode: missing.append("pincode")
+
+        if missing:
+            return {
+                "status": "error",
+                "message": "Missing mandatory fields",
+                "missing": missing
+            }
+
+        # -------------------------
+        # CREATE ADDRESS DOC
+        # -------------------------
+        address = frappe.get_doc({
+            "doctype": "Address",
+            "address_title": address_title,
+            "address_type": data.get("address_type", "Billing"),
+
+            "address_line1": address_line1,
+            "custom_building_number": building,
+            "custom_area": area,
+            "city": data.get("city"),          # Optional
+            "state": data.get("state"),        # Optional
+            "country": country,
+            "pincode": pincode,
+
+            "phone": data.get("phone"),
+            "email_id": data.get("email_id"),
+
+            "is_primary_address": cint(data.get("is_primary_address", 0)),
+            "is_shipping_address": cint(data.get("is_shipping_address", 0)),
+            "disabled": cint(data.get("disabled", 0)),
+
+            # ✅ LINK TO CUSTOMER
+            "links": [
+                {
+                    "link_doctype": "Customer",
+                    "link_name": customer
+                }
+            ]
+        })
+
+        address.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        return {
+            "status": "success",
+            "message": "Customer address created",
+            "data": {
+                "address_name": address.name,
+                "customer": customer,
+                "address_title": address.address_title
+            }
+        }
+
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.log_error("Create Customer Address Error", frappe.get_traceback())
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+
+
+
 @frappe.whitelist(allow_guest=True)
 def get_warehouse_list(company=None):
     """
@@ -973,16 +1083,15 @@ def create_sales_invoice():
     """
     Create or update a Sales Invoice with:
     - Item creation
-    - Auto-detected default Sales Taxes & Charges template
-    - Manual taxes fallback
-    - Shipping & extra charges
+    - Default tax template auto-detected
+    - Manual fallback disabled
     - Stock update
-    - VAT summary response
-    - custom_mode_of_payment field (Cash/Credit/Bank/POS)
+    - VAT summary
+    - Custom Mode of Payment
+    - Discount (Amount / Percentage)
     """
 
     try:
-        
         data = json.loads(frappe.request.data) if frappe.request.data else frappe.form_dict
 
         required_fields = ["customer_name", "company", "items"]
@@ -993,7 +1102,6 @@ def create_sales_invoice():
         customer_name = data["customer_name"]
         company = data["company"]
 
-       
         if not frappe.db.exists("Company", company):
             return {"status": "error", "message": f"Company '{company}' not found"}
 
@@ -1006,7 +1114,7 @@ def create_sales_invoice():
         if not income_account or not receivable_account:
             return {"status": "error", "message": "Company missing default accounts"}
 
-      
+        # Ensure customer
         create_or_update_customer({
             "customer_name": customer_name,
             "customer_type": data.get("customer_type", "Company"),
@@ -1022,18 +1130,19 @@ def create_sales_invoice():
         target_warehouse = data.get("target_warehouse") or get_default_warehouse(company)
 
         custom_mode_of_payment = data.get("custom_mode_of_payment")
-        
+
         if custom_mode_of_payment and not frappe.db.exists("Mode of Payment", custom_mode_of_payment):
             return {
                 "status": "error", 
-                "message": f"Mode of Payment '{custom_mode_of_payment}' not found. Valid options: Cash, Credit, Bank Transfer, etc."
+                "message": f"Mode of Payment '{custom_mode_of_payment}' not found"
             }
 
-      
-        items_data = data.get("items")
+        # ---------------------------
+        # BUILD ITEMS
+        # ---------------------------
         invoice_items = []
 
-        for item in items_data:
+        for item in data.get("items"):
             item_code = item.get("item_code")
             if not item_code:
                 continue
@@ -1069,9 +1178,9 @@ def create_sales_invoice():
 
             invoice_items.append(row)
 
-        
-        tax_rows = []
-
+        # ---------------------------
+        # DEFAULT TAX TEMPLATE
+        # ---------------------------
         resolved_tax_template = frappe.db.get_value(
             "Sales Taxes and Charges Template",
             {
@@ -1085,22 +1194,23 @@ def create_sales_invoice():
         if not resolved_tax_template:
             return {
                 "status": "error",
-                "message": f"No default Sales Taxes and Charges Template found for company '{company}'"
+                "message": f"No default Sales Taxes and Charges Template for '{company}'"
             }
 
         tpl = frappe.get_doc("Sales Taxes and Charges Template", resolved_tax_template)
-        for t in tpl.taxes:
-            tax_rows.append({
-                "charge_type": t.charge_type,
-                "account_head": t.account_head,
-                "description": t.description,
-                "rate": t.rate,
-                "tax_amount": t.tax_amount,
-                "cost_center": cost_center
-            })
+        tax_rows = [{
+            "charge_type": t.charge_type,
+            "account_head": t.account_head,
+            "description": t.description,
+            "rate": t.rate,
+            "cost_center": cost_center
+        } for t in tpl.taxes]
 
         invoice_name = data.get("invoice_name")
 
+        # ---------------------------
+        # CREATE / UPDATE
+        # ---------------------------
         if invoice_name and frappe.db.exists("Sales Invoice", invoice_name):
             doc = frappe.get_doc("Sales Invoice", invoice_name)
 
@@ -1111,24 +1221,17 @@ def create_sales_invoice():
             doc.company = company
             doc.posting_date = posting_date
             doc.due_date = due_date
+            doc.items = invoice_items
+            doc.taxes = tax_rows
+            doc.taxes_and_charges = resolved_tax_template
             doc.update_stock = update_stock
-
             if target_warehouse:
                 doc.set_warehouse = target_warehouse
-
             if custom_mode_of_payment:
                 doc.custom_mode_of_payment = custom_mode_of_payment
 
-            doc.set("items", invoice_items)
-            doc.set("taxes", tax_rows)
-
-            doc.taxes_and_charges = resolved_tax_template
-
-            doc.save(ignore_permissions=True)
-            frappe.db.commit()
-
         else:
-            invoice_data = {
+            doc = frappe.get_doc({
                 "doctype": "Sales Invoice",
                 "customer": customer_name,
                 "company": company,
@@ -1141,23 +1244,33 @@ def create_sales_invoice():
                 "update_stock": update_stock,
                 "items": invoice_items,
                 "taxes": tax_rows,
-                "taxes_and_charges": resolved_tax_template
-            }
+                "taxes_and_charges": resolved_tax_template,
+                "custom_mode_of_payment": custom_mode_of_payment
+            })
 
             if data.get("naming_series"):
-                invoice_data["naming_series"] = data["naming_series"]
+                doc.naming_series = data["naming_series"]
 
             if target_warehouse:
-                invoice_data["set_warehouse"] = target_warehouse
+                doc.set_warehouse = target_warehouse
 
-            if custom_mode_of_payment:
-                invoice_data["custom_mode_of_payment"] = custom_mode_of_payment
+        # ---------------------------
+        # APPLY DISCOUNT ✅
+        # ---------------------------
+        if data.get("discount_amount"):
+            doc.discount_amount = flt(data.get("discount_amount"))
+            doc.apply_discount_on = data.get("apply_discount_on", "Grand Total")
 
-            doc = frappe.get_doc(invoice_data)
-            doc.insert(ignore_permissions=True)
-            frappe.db.commit()
+        if data.get("discount_percentage"):
+            doc.additional_discount_percentage = flt(data.get("discount_percentage"))
+            doc.apply_discount_on = data.get("apply_discount_on", "Grand Total")
 
-       
+        doc.insert(ignore_permissions=True) if not doc.name else doc.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        # ---------------------------
+        # RESPONSE
+        # ---------------------------
         return {
             "status": "success",
             "message": f"Invoice {doc.name} created successfully",
@@ -1165,11 +1278,14 @@ def create_sales_invoice():
                 "invoice_name": doc.name,
                 "customer": doc.customer,
                 "company": doc.company,
-
                 "posting_date": str(doc.posting_date),
                 "due_date": str(doc.due_date),
 
                 "net_total": doc.net_total,
+                "discount_amount": doc.discount_amount or 0,
+                "discount_percentage": doc.additional_discount_percentage or 0,
+                "apply_discount_on": doc.apply_discount_on or "",
+
                 "vat_amount": doc.total_taxes_and_charges,
                 "tax_total": doc.total_taxes_and_charges,
                 "grand_total": doc.grand_total,
@@ -1177,33 +1293,25 @@ def create_sales_invoice():
                 "rounding_adjustment": doc.rounding_adjustment or 0,
                 "outstanding_amount": doc.outstanding_amount,
 
-                "taxes_and_charges": resolved_tax_template,
-                
-                "custom_mode_of_payment": doc.get("custom_mode_of_payment"),
+                "custom_mode_of_payment": doc.custom_mode_of_payment,
 
-                "items": [
-                    {
-                        "item_code": i.item_code,
-                        "qty": i.qty,
-                        "rate": i.rate,
-                        "amount": i.amount,
-                        "uom": i.uom,
-                        "description": i.description
-                    }
-                    for i in doc.items
-                ],
+                "items": [{
+                    "item_code": i.item_code,
+                    "qty": i.qty,
+                    "rate": i.rate,
+                    "amount": i.amount,
+                    "uom": i.uom,
+                    "description": i.description
+                } for i in doc.items],
 
-                "taxes": [
-                    {
-                        "description": t.description,
-                        "charge_type": t.charge_type,
-                        "account_head": t.account_head,
-                        "cost_center": t.cost_center,
-                        "rate": t.rate,
-                        "tax_amount": t.tax_amount
-                    }
-                    for t in doc.taxes
-                ]
+                "taxes": [{
+                    "description": t.description,
+                    "charge_type": t.charge_type,
+                    "account_head": t.account_head,
+                    "cost_center": t.cost_center,
+                    "rate": t.rate,
+                    "tax_amount": t.tax_amount
+                } for t in doc.taxes]
             }
         }
 
