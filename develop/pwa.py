@@ -980,15 +980,26 @@ def create_customer_address():
 @frappe.whitelist(allow_guest=False, methods=["POST"])
 def update_customer_address():
     """
-    Update an existing customer Address.
+    Update an existing Address.
+    Customer is passed from URL (?customer=XXXX).
     
     Required:
-    - address_name
+    - customer (from URL)
+    - address_name (in JSON)
     
-    Customer linking will NOT be modified unless explicitly passed.
+    Only fields provided in the payload will be updated.
     """
 
     try:
+        # Customer from URL
+        customer = frappe.form_dict.get("customer")
+        if not customer:
+            return {"status": "error", "message": "customer is required in the API URL"}
+
+        if not frappe.db.exists("Customer", customer):
+            return {"status": "error", "message": f"Customer '{customer}' not found"}
+
+        # JSON Body
         data = json.loads(frappe.request.data) if frappe.request.data else frappe.form_dict
 
         address_name = data.get("address_name")
@@ -1000,54 +1011,50 @@ def update_customer_address():
 
         doc = frappe.get_doc("Address", address_name)
 
-        # Fields allowed to be updated
-        fields = [
+        # -----------------------------
+        # Update allowed address fields
+        # -----------------------------
+        editable_fields = [
             "address_title", "address_type", "address_line1", "address_line2",
             "custom_building_number", "custom_area", "city", "state",
             "country", "pincode", "phone", "email_id",
             "is_primary_address", "is_shipping_address", "disabled"
         ]
 
-        for field in fields:
+        for field in editable_fields:
             if field in data:
                 doc.set(field, data.get(field))
 
         # -----------------------------
-        # DO NOT CHANGE CUSTOMER LINK
-        # UNLESS customer WAS PROVIDED
+        # Ensure the address stays linked to this customer
         # -----------------------------
-        if "customer" in data:
-            new_customer = data.get("customer")
+        frappe.db.delete(
+            "Dynamic Link",
+            {"parent": address_name, "link_doctype": "Customer"}
+        )
 
-            if not frappe.db.exists("Customer", new_customer):
-                return {"status": "error", "message": f"Customer '{new_customer}' not found"}
+        doc.append("links", {
+            "link_doctype": "Customer",
+            "link_name": customer
+        })
 
-            # remove existing customer links
-            frappe.db.delete(
-                "Dynamic Link",
-                {"parent": address_name, "link_doctype": "Customer"}
-            )
-
-            # add new link
-            doc.append("links", {
-                "link_doctype": "Customer",
-                "link_name": new_customer
-            })
-
+        # Save changes
         doc.save(ignore_permissions=True)
         frappe.db.commit()
 
         return {
             "status": "success",
-            "message": f"Address {address_name} updated successfully",
-            "data": {"address_name": doc.name}
+            "message": f"Address '{address_name}' updated successfully",
+            "data": {
+                "address_name": address_name,
+                "customer": customer
+            }
         }
 
     except Exception as e:
         frappe.db.rollback()
         frappe.log_error("Update Customer Address Error", frappe.get_traceback())
         return {"status": "error", "message": str(e)}
-
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
