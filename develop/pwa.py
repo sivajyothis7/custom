@@ -981,17 +981,29 @@ def create_customer_address():
 def update_customer_address():
     """
     Update an existing Address.
-    Customer is passed from URL (?customer=XXXX).
-    
+    Customer must be passed from API URL (?customer=XXXX).
+
     Required:
     - customer (from URL)
-    - address_name (in JSON)
-    
-    Only fields provided in the payload will be updated.
+    - address_name (in JSON body)
+
+    Only provided fields will be updated.
     """
 
     try:
-        # Customer from URL
+        # -----------------------------
+        # READ JSON BODY PROPERLY
+        # -----------------------------
+        body = {}
+        if frappe.request.data:
+            try:
+                body = json.loads(frappe.request.data)
+            except:
+                body = frappe.form_dict
+
+        # -----------------------------
+        # GET CUSTOMER FROM URL
+        # -----------------------------
         customer = frappe.form_dict.get("customer")
         if not customer:
             return {"status": "error", "message": "customer is required in the API URL"}
@@ -999,34 +1011,38 @@ def update_customer_address():
         if not frappe.db.exists("Customer", customer):
             return {"status": "error", "message": f"Customer '{customer}' not found"}
 
-        # JSON Body
-        data = json.loads(frappe.request.data) if frappe.request.data else frappe.form_dict
-
-        address_name = data.get("address_name")
+        # -----------------------------
+        # ADDRESS NAME (FROM BODY)
+        # -----------------------------
+        address_name = body.get("address_name")
         if not address_name:
             return {"status": "error", "message": "address_name is required"}
 
         if not frappe.db.exists("Address", address_name):
             return {"status": "error", "message": f"Address '{address_name}' not found"}
 
+        # Load document
         doc = frappe.get_doc("Address", address_name)
 
         # -----------------------------
-        # Update allowed address fields
+        # UPDATE ADDRESS FIELDS
+        # Only update fields if provided
         # -----------------------------
         editable_fields = [
             "address_title", "address_type", "address_line1", "address_line2",
-            "custom_building_number", "custom_area", "city", "state",
-            "country", "pincode", "phone", "email_id",
+            "custom_building_number", "custom_area",
+            "city", "state", "country", "pincode",
+            "phone", "email_id",
             "is_primary_address", "is_shipping_address", "disabled"
         ]
 
         for field in editable_fields:
-            if field in data:
-                doc.set(field, data.get(field))
+            if field in body:
+                doc.set(field, body.get(field))
 
         # -----------------------------
-        # Ensure the address stays linked to this customer
+        # LINK ADDRESS TO CUSTOMER
+        # Always ensures correct link
         # -----------------------------
         frappe.db.delete(
             "Dynamic Link",
@@ -1038,7 +1054,9 @@ def update_customer_address():
             "link_name": customer
         })
 
-        # Save changes
+        # -----------------------------
+        # SAVE
+        # -----------------------------
         doc.save(ignore_permissions=True)
         frappe.db.commit()
 
@@ -1055,6 +1073,8 @@ def update_customer_address():
         frappe.db.rollback()
         frappe.log_error("Update Customer Address Error", frappe.get_traceback())
         return {"status": "error", "message": str(e)}
+
+
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
