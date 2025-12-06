@@ -976,6 +976,97 @@ def create_customer_address():
             "message": str(e)
         }
 
+@frappe.whitelist(allow_guest=False, methods=["GET"])
+def get_customer_with_addresses():
+    """
+    Returns customer details first, then all addresses linked to the customer.
+
+    Query Parameters:
+    - customer (required)
+    """
+
+    try:
+        customer = frappe.form_dict.get("customer")
+        if not customer:
+            return {"status": "error", "message": "customer is required"}
+
+        # Validate customer
+        if not frappe.db.exists("Customer", customer):
+            return {"status": "error", "message": f"Customer '{customer}' not found"}
+
+        # ----------------------------
+        # CUSTOMER DETAILS
+        # ----------------------------
+        cust = frappe.get_doc("Customer", customer)
+
+        customer_details = {
+            "customer_id": cust.name,
+            "customer_name": cust.customer_name,
+            "customer_type": cust.customer_type,
+            "customer_group": cust.customer_group,
+            "territory": cust.territory,
+            "tax_id": cust.tax_id,
+            "mobile_no": cust.mobile_no,
+            "email_id": cust.email_id
+        }
+
+        # ----------------------------
+        # FIND ALL ADDRESSES LINKED TO CUSTOMER
+        # ----------------------------
+        address_links = frappe.get_all(
+            "Dynamic Link",
+            filters={"link_doctype": "Customer", "link_name": customer},
+            fields=["parent as address_name"]
+        )
+
+        if not address_links:
+            return {
+                "status": "success",
+                "customer": customer_details,
+                "addresses": []
+            }
+
+        address_names = [a.address_name for a in address_links]
+
+        # ----------------------------
+        # FETCH ADDRESS DETAILS
+        # ----------------------------
+        addresses = frappe.get_all(
+            "Address",
+            filters={"name": ["in", address_names]},
+            fields=[
+                "name",
+                "address_title",
+                "address_type",
+                "address_line1",
+                "address_line2",
+                "city",
+                "state",
+                "country",
+                "pincode",
+                "phone",
+                "email_id",
+                "custom_building_number",
+                "custom_area",
+                "is_primary_address",
+                "is_shipping_address",
+                "modified"
+            ],
+            order_by="is_primary_address desc, modified desc"
+        )
+
+        return {
+            "status": "success",
+            "customer": customer_details,
+            "addresses": addresses,
+            "count": len(addresses)
+        }
+
+    except Exception as e:
+        frappe.log_error("Customer With Address Error", frappe.get_traceback())
+        return {"status": "error", "message": str(e)}
+
+
 
 
 
