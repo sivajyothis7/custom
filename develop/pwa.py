@@ -1195,78 +1195,78 @@ def get_warehouse_list(company=None):
         "warehouses": warehouses
     }
 
-@frappe.whitelist(allow_guest=True)
-def get_sales_invoice_list():
-    """
-    Fetch Sales Invoice list with DIRECT PDF download URL
-    Print Format: Sales Invoice PF
-    """
+# @frappe.whitelist(allow_guest=True)
+# def get_sales_invoice_list():
+#     """
+#     Fetch Sales Invoice list with DIRECT PDF download URL
+#     Print Format: Sales Invoice PF
+#     """
 
-    customer = frappe.form_dict.get("customer")
-    status = frappe.form_dict.get("status")
-    start_date = frappe.form_dict.get("start_date")
-    end_date = frappe.form_dict.get("end_date")
+#     customer = frappe.form_dict.get("customer")
+#     status = frappe.form_dict.get("status")
+#     start_date = frappe.form_dict.get("start_date")
+#     end_date = frappe.form_dict.get("end_date")
 
-    filters = {}
+#     filters = {}
 
-    if customer:
-        filters["customer"] = customer
+#     if customer:
+#         filters["customer"] = customer
 
-    if status:
-        filters["status"] = status
+#     if status:
+#         filters["status"] = status
 
-    if start_date and end_date:
-        filters["posting_date"] = ["between", [start_date, end_date]]
+#     if start_date and end_date:
+#         filters["posting_date"] = ["between", [start_date, end_date]]
 
-    invoice_names = frappe.get_all(
-        "Sales Invoice",
-        filters=filters,
-        fields=["name"],
-        order_by="posting_date desc, modified desc"
-    )
+#     invoice_names = frappe.get_all(
+#         "Sales Invoice",
+#         filters=filters,
+#         fields=["name"],
+#         order_by="posting_date desc, modified desc"
+#     )
 
-    base_url = frappe.utils.get_url()
-    invoice_list = []
+#     base_url = frappe.utils.get_url()
+#     invoice_list = []
 
-    # ✅ Encode the format safely
-    print_format = frappe.utils.quote("Sales Invoice PF")
+#     # ✅ Encode the format safely
+#     print_format = frappe.utils.quote("Sales Invoice PF")
 
-    for inv in invoice_names:
-        doc = frappe.get_doc("Sales Invoice", inv.name)
+#     for inv in invoice_names:
+#         doc = frappe.get_doc("Sales Invoice", inv.name)
 
-        # ✅ DIRECT DOWNLOAD PDF URL
-        pdf_url = (
-            f"{base_url}/api/method/frappe.utils.print_format.download_pdf?"
-            f"doctype=Sales%20Invoice"
-            f"&name={doc.name}"
-            f"&format={print_format}"
-            f"&no_letterhead=0"
-            f"&download=1"
-        )
+#         # ✅ DIRECT DOWNLOAD PDF URL
+#         pdf_url = (
+#             f"{base_url}/api/method/frappe.utils.print_format.download_pdf?"
+#             f"doctype=Sales%20Invoice"
+#             f"&name={doc.name}"
+#             f"&format={print_format}"
+#             f"&no_letterhead=0"
+#             f"&download=1"
+#         )
 
-        invoice_list.append({
-            "name": doc.name,
-            "customer": doc.customer,
-            "company": doc.company,
-            "posting_date": doc.posting_date,
-            "due_date": doc.due_date,
-            "net_total": doc.net_total,
-            "tax_total": doc.total_taxes_and_charges,
-            "grand_total": doc.grand_total,
-            "rounded_total": doc.rounded_total or doc.grand_total,
-            "outstanding_amount": doc.outstanding_amount,
-            "status": doc.status,
+#         invoice_list.append({
+#             "name": doc.name,
+#             "customer": doc.customer,
+#             "company": doc.company,
+#             "posting_date": doc.posting_date,
+#             "due_date": doc.due_date,
+#             "net_total": doc.net_total,
+#             "tax_total": doc.total_taxes_and_charges,
+#             "grand_total": doc.grand_total,
+#             "rounded_total": doc.rounded_total or doc.grand_total,
+#             "outstanding_amount": doc.outstanding_amount,
+#             "status": doc.status,
 
-            # ✅ PDF file download link
-            "pdf_url": pdf_url
-        })
+#             # ✅ PDF file download link
+#             "pdf_url": pdf_url
+#         })
 
-    return {
-        "status_code": 200,
-        "print_format": "Sales Invoice PF",
-        "count": len(invoice_list),
-        "invoices": invoice_list
-    }
+#     return {
+#         "status_code": 200,
+#         "print_format": "Sales Invoice PF",
+#         "count": len(invoice_list),
+#         "invoices": invoice_list
+#     }
 
 
 
@@ -3663,7 +3663,7 @@ def get_customers():
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
-def get_sales_invoices():
+def get_sales_invoice_list():
     """
     Get list of sales invoices filtered by sales person and warehouse.
     
