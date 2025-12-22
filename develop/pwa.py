@@ -3388,23 +3388,520 @@ def get_sales_returns_list():
 
 
 
+
+
+# ============================================================================
+# HELPER FUNCTIONS FOR PERMISSION FILTERING
+# ============================================================================
+
+def get_user_sales_person(user=None):
+    """
+    Get the sales person linked to the user.
+    
+    Returns:
+        str: Sales Person name linked to user, or None if not found
+    """
+    if not user:
+        user = frappe.session.user
+    
+    # Administrator and System Manager can see all
+    if user == "Administrator" or "System Manager" in frappe.get_roles(user):
+        return None
+    
+    # Get Sales Person linked to this user
+    sales_person = frappe.db.get_value(
+        "Sales Person",
+        {"user": user},
+        "name"
+    )
+    
+    return sales_person
+
+
+def get_user_customers(user=None, include_walkin=True):
+    """
+    Get list of customers assigned to the user via Sales Team.
+    
+    Args:
+        user: User email (default: current user)
+        include_walkin: Whether to include "Walk-In Customer" (default: True)
+    
+    Returns:
+        list: List of customer names, or None if user can see all customers
+    """
+    if not user:
+        user = frappe.session.user
+    
+    # Administrator and System Manager can see all
+    if user == "Administrator" or "System Manager" in frappe.get_roles(user):
+        return None
+    
+    # Check if user has Accounts role profile - they see all customers
+    user_doc = frappe.get_doc("User", user)
+    role_profile = user_doc.role_profile_name
+    
+    if role_profile == "Accounts":
+        return None  # Accounts users see all customers
+    
+    # Get sales person for this user
+    sales_person = get_user_sales_person(user)
+    
+    if not sales_person:
+        # User is not a sales person and not Accounts
+        return []  # See no customers
+    
+    # Get customers where this sales person is in the sales_team
+    customers = frappe.db.sql("""
+        SELECT DISTINCT parent
+        FROM `tabSales Team`
+        WHERE sales_person = %s
+        AND parenttype = 'Customer'
+        AND docstatus < 2
+    """, (sales_person,), as_dict=True)
+    
+    customer_list = [c['parent'] for c in customers]
+    
+    # Always include Walk-In Customer if requested
+    if include_walkin and "Walk-In Customer" not in customer_list:
+        customer_list.append("Walk-In Customer")
+    
+    return customer_list if customer_list else []
+
+
+def get_user_warehouses(user=None):
+    """
+    Get list of warehouses the user has permission to access.
+    
+    Returns:
+        list: List of warehouse names, or None if user has access to all
+    """
+    if not user:
+        user = frappe.session.user
+    
+    # Administrator has access to all warehouses
+    if user == "Administrator":
+        return None
+    
+    # System Manager has access to all warehouses
+    if "System Manager" in frappe.get_roles(user):
+        return None
+    
+    # Check if user has "Accounts" role profile
+    user_doc = frappe.get_doc("User", user)
+    role_profile = user_doc.role_profile_name
+    
+    # If user has Accounts role profile, strictly enforce warehouse permissions
+    if role_profile == "Accounts":
+        user_permissions = frappe.get_all(
+            "User Permission",
+            filters={
+                "user": user,
+                "allow": "Warehouse"
+            },
+            fields=["for_value"],
+            distinct=True
+        )
+        
+        if not user_permissions:
+            return []
+        
+        return [perm.for_value for perm in user_permissions]
+    
+    # For non-Accounts users
+    user_permissions = frappe.get_all(
+        "User Permission",
+        filters={
+            "user": user,
+            "allow": "Warehouse"
+        },
+        fields=["for_value"],
+        distinct=True
+    )
+    
+    if not user_permissions:
+        return None
+    
+    return [perm.for_value for perm in user_permissions]
+
+
+def validate_warehouse_access(warehouse, user_warehouses):
+    """Validate warehouse access"""
+    if user_warehouses is None:
+        return {"valid": True, "message": ""}
+    
+    if not user_warehouses:
+        return {
+            "valid": False,
+            "message": "No warehouses assigned to your user."
+        }
+    
+    if warehouse not in user_warehouses:
+        return {
+            "valid": False,
+            "message": f"No permission for warehouse: {warehouse}. Your warehouses: {', '.join(user_warehouses)}"
+        }
+    
+    return {"valid": True, "message": ""}
+
+
+def validate_customer_access(customer, user_customers):
+    """Validate customer access"""
+    if user_customers is None:
+        return {"valid": True, "message": ""}
+    
+    if not user_customers:
+        return {
+            "valid": False,
+            "message": "No customers assigned to your sales person."
+        }
+    
+    if customer not in user_customers:
+        return {
+            "valid": False,
+            "message": f"You don't have access to customer: {customer}. You can only access customers assigned to your sales person."
+        }
+    
+    return {"valid": True, "message": ""}
+
+
+# ============================================================================
+# CUSTOMER APIs
+# ============================================================================
+
+@frappe.whitelist(allow_guest=False, methods=["GET"])
+def get_customers():
+    """
+    Get list of customers filtered by sales person assignment.
+    
+    Query Parameters:
+    - search: Search in customer name or customer_name (optional)
+    - limit: Number of records (default: 100)
+    - offset: Pagination offset (default: 0)
+    
+    Filtering Logic:
+    - System Manager/Administrator: See ALL customers
+    - Sales Person users: See only customers in their sales_team
+    - Accounts role profile: See ALL customers
+    - Walk-In Customer: Always included for sales persons
+    - Other users: See no customers (empty list)
+    """
+    try:
+        search = frappe.form_dict.get("search")
+        limit = cint(frappe.form_dict.get("limit", 100))
+        offset = cint(frappe.form_dict.get("offset", 0))
+        
+        # Get user's permitted customers
+        user_customers = get_user_customers()
+        
+        conditions = []
+        
+        if user_customers is not None:
+            if not user_customers:
+                return {
+                    "status": "success",
+                    "data": {
+                        "customers": [],
+                        "message": "No customers assigned to your sales person.",
+                        "pagination": {
+                            "limit": limit,
+                            "offset": offset,
+                            "count": 0,
+                            "total": 0
+                        }
+                    }
+                }
+            
+            # Filter by permitted customers
+            customer_list = "', '".join(user_customers)
+            conditions.append(f"name IN ('{customer_list}')")
+        
+        if search:
+            conditions.append(f"(name LIKE '%{search}%' OR customer_name LIKE '%{search}%')")
+        
+        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+        
+        # Get customers
+        query = f"""
+            SELECT 
+                name as customer,
+                customer_name,
+                customer_type,
+                territory,
+                customer_group
+            FROM `tabCustomer`
+            {where_clause}
+            ORDER BY customer_name ASC
+            LIMIT {limit} OFFSET {offset}
+        """
+        
+        customers = frappe.db.sql(query, as_dict=True)
+        
+        # Get total count
+        count_query = f"""
+            SELECT COUNT(*) as total
+            FROM `tabCustomer`
+            {where_clause}
+        """
+        total = frappe.db.sql(count_query, as_dict=True)[0]['total']
+        
+        return {
+            "status": "success",
+            "data": {
+                "customers": customers,
+                "pagination": {
+                    "limit": limit,
+                    "offset": offset,
+                    "count": len(customers),
+                    "total": cint(total)
+                }
+            }
+        }
+        
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "Get Customers Error")
+        return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET"])
+def get_sales_invoices():
+    """
+    Get list of sales invoices filtered by sales person and warehouse.
+    
+    Query Parameters:
+    - customer: Filter by customer (optional)
+    - warehouse: Filter by warehouse (optional)
+    - status: Filter by docstatus (0=Draft, 1=Submitted, 2=Cancelled)
+    - from_date: Filter by posting_date >= (optional)
+    - to_date: Filter by posting_date <= (optional)
+    - search: Search in invoice name or customer (optional)
+    - limit: Number of records (default: 100)
+    - offset: Pagination offset (default: 0)
+    
+    Filtering Logic:
+    - Filters by user's permitted customers (sales person assignment)
+    - Filters by user's permitted warehouses
+    - Walk-In Customer invoices always included
+    - System Manager/Administrator see all
+    """
+    try:
+        customer = frappe.form_dict.get("customer")
+        warehouse = frappe.form_dict.get("warehouse")
+        status = frappe.form_dict.get("status")
+        from_date = frappe.form_dict.get("from_date")
+        to_date = frappe.form_dict.get("to_date")
+        search = frappe.form_dict.get("search")
+        limit = cint(frappe.form_dict.get("limit", 100))
+        offset = cint(frappe.form_dict.get("offset", 0))
+        
+        # Get user's permitted customers and warehouses
+        user_customers = get_user_customers()
+        user_warehouses = get_user_warehouses()
+        
+        conditions = []
+        
+        # Apply customer filter
+        if user_customers is not None:
+            if not user_customers:
+                return {
+                    "status": "success",
+                    "data": {
+                        "invoices": [],
+                        "message": "No customers assigned to your sales person.",
+                        "pagination": {
+                            "limit": limit,
+                            "offset": offset,
+                            "count": 0,
+                            "total": 0
+                        }
+                    }
+                }
+            
+            if customer:
+                validation = validate_customer_access(customer, user_customers)
+                if not validation["valid"]:
+                    return {"status": "error", "message": validation["message"]}
+                conditions.append(f"si.customer = '{customer}'")
+            else:
+                customer_list = "', '".join(user_customers)
+                conditions.append(f"si.customer IN ('{customer_list}')")
+        else:
+            if customer:
+                conditions.append(f"si.customer = '{customer}'")
+        
+        # Apply warehouse filter
+        if user_warehouses is not None:
+            if not user_warehouses:
+                return {
+                    "status": "error",
+                    "message": "No warehouses assigned to your user."
+                }
+            
+            if warehouse:
+                validation = validate_warehouse_access(warehouse, user_warehouses)
+                if not validation["valid"]:
+                    return {"status": "error", "message": validation["message"]}
+                conditions.append(f"""
+                    EXISTS (
+                        SELECT 1 FROM `tabSales Invoice Item` sii
+                        WHERE sii.parent = si.name
+                        AND sii.warehouse = '{warehouse}'
+                    )
+                """)
+            else:
+                warehouse_list = "', '".join(user_warehouses)
+                conditions.append(f"""
+                    EXISTS (
+                        SELECT 1 FROM `tabSales Invoice Item` sii
+                        WHERE sii.parent = si.name
+                        AND sii.warehouse IN ('{warehouse_list}')
+                    )
+                """)
+        else:
+            if warehouse:
+                conditions.append(f"""
+                    EXISTS (
+                        SELECT 1 FROM `tabSales Invoice Item` sii
+                        WHERE sii.parent = si.name
+                        AND sii.warehouse = '{warehouse}'
+                    )
+                """)
+        
+        # Apply other filters
+        if status is not None:
+            conditions.append(f"si.docstatus = {cint(status)}")
+        
+        if from_date:
+            conditions.append(f"si.posting_date >= '{from_date}'")
+        
+        if to_date:
+            conditions.append(f"si.posting_date <= '{to_date}'")
+        
+        if search:
+            conditions.append(f"(si.name LIKE '%{search}%' OR si.customer LIKE '%{search}%' OR si.customer_name LIKE '%{search}%')")
+        
+        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+        
+        # Get invoices
+        query = f"""
+            SELECT 
+                si.name,
+                si.customer,
+                si.customer_name,
+                si.posting_date,
+                si.due_date,
+                si.grand_total,
+                si.outstanding_amount,
+                si.status,
+                si.docstatus,
+                si.currency
+            FROM `tabSales Invoice` si
+            {where_clause}
+            ORDER BY si.posting_date DESC, si.creation DESC
+            LIMIT {limit} OFFSET {offset}
+        """
+        
+        invoices = frappe.db.sql(query, as_dict=True)
+        
+        # Get total count
+        count_query = f"""
+            SELECT COUNT(*) as total
+            FROM `tabSales Invoice` si
+            {where_clause}
+        """
+        total = frappe.db.sql(count_query, as_dict=True)[0]['total']
+        
+        return {
+            "status": "success",
+            "data": {
+                "invoices": [{
+                    "name": inv.name,
+                    "customer": inv.customer,
+                    "customer_name": inv.customer_name,
+                    "posting_date": str(inv.posting_date),
+                    "due_date": str(inv.due_date) if inv.due_date else None,
+                    "grand_total": flt(inv.grand_total, 2),
+                    "outstanding_amount": flt(inv.outstanding_amount, 2),
+                    "status": inv.status,
+                    "docstatus": inv.docstatus,
+                    "currency": inv.currency
+                } for inv in invoices],
+                "pagination": {
+                    "limit": limit,
+                    "offset": offset,
+                    "count": len(invoices),
+                    "total": cint(total)
+                }
+            }
+        }
+        
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "Get Sales Invoices Error")
+        return {"status": "error", "message": str(e)}
+
+
+# ============================================================================
+# STOCK BALANCE APIs (WITH PERMISSIONS)
+# ============================================================================
+
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_stock_balance_summary():
-
+    """
+    Get stock balance summary with user permission filtering.
+    
+    Returns summary for 3 cards:
+    - Total Items (Unique SKUs)
+    - Total Quantity (All units)  
+    - Stock Value (At cost price)
+    
+    Query Parameters:
+    - warehouse: Filter by specific warehouse (optional)
+    - company: Filter by company (optional, default: user's default company)
+    
+    User Permissions:
+    - Automatically filters by warehouses user has permission to access
+    - Users with "Accounts" role profile MUST have warehouse permissions
+    - System Managers and Administrators see all warehouses
+    """
     try:
         warehouse = frappe.form_dict.get("warehouse")
         company = frappe.form_dict.get("company") or frappe.defaults.get_user_default("Company")
-
+        
         conditions = []
-
-        if warehouse:
-            conditions.append(f"sle.warehouse = '{warehouse}'")
-
+        
+        # Get user's permitted warehouses
+        user_warehouses = get_user_warehouses()
+        
+        # Apply user permission filter
+        if user_warehouses is not None:
+            if not user_warehouses:
+                return {
+                    "status": "error",
+                    "message": "No warehouses assigned to your user.",
+                    "data": {
+                        "total_items": 0,
+                        "total_quantity": 0.0,
+                        "stock_value": 0.0,
+                        "currency": "SAR"
+                    }
+                }
+            
+            if warehouse:
+                validation = validate_warehouse_access(warehouse, user_warehouses)
+                if not validation["valid"]:
+                    return {"status": "error", "message": validation["message"]}
+                conditions.append(f"sle.warehouse = '{warehouse}'")
+            else:
+                warehouse_list = "', '".join(user_warehouses)
+                conditions.append(f"sle.warehouse IN ('{warehouse_list}')")
+        else:
+            if warehouse:
+                conditions.append(f"sle.warehouse = '{warehouse}'")
+        
         if company:
             conditions.append(f"wh.company = '{company}'")
-
+        
         where_clause = " AND " + " AND ".join(conditions) if conditions else ""
-
+        
         query = f"""
             SELECT 
                 COUNT(DISTINCT sle.item_code) as total_items,
@@ -3427,13 +3924,11 @@ def get_stock_balance_summary():
             AND sle.qty_after_transaction > 0
             {where_clause}
         """
-
+        
         result = frappe.db.sql(query, as_dict=True)
-
         currency = frappe.db.get_value("Company", company, "default_currency") if company else "SAR"
-
         summary = result[0] if result else {}
-
+        
         return {
             "status": "success",
             "data": {
@@ -3443,27 +3938,67 @@ def get_stock_balance_summary():
                 "currency": currency or "SAR"
             }
         }
-
+        
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "Stock Summary Error")
         return {"status": "error", "message": str(e)}
 
 
-
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_stock_levels():
-
+    """
+    Get detailed stock levels with user permission filtering.
+    
+    Returns detailed list of stock items with current balances.
+    Automatically filters by warehouses user has permission to access.
+    
+    Query Parameters:
+    - warehouse: Filter by warehouse (optional)
+    - company: Filter by company (optional, default: user's default company)
+    - item_code: Search by item code (optional, partial match)
+    - item_name: Search by item name (optional, partial match)
+    - search: Search in both code and name (optional)
+    
+    User Permissions:
+    - Automatically filters by warehouses user has permission to access
+    - Users with "Accounts" role profile MUST have warehouse permissions
+    - Returns error if user tries to access unauthorized warehouse
+    """
     try:
         warehouse = frappe.form_dict.get("warehouse")
         company = frappe.form_dict.get("company") or frappe.defaults.get_user_default("Company")
         item_code_search = frappe.form_dict.get("item_code")
         item_name_search = frappe.form_dict.get("item_name")
         general_search = frappe.form_dict.get("search")
-
+        
         conditions = ["sle.qty_after_transaction > 0"]
-
-        if warehouse:
-            conditions.append(f"sle.warehouse = '{warehouse}'")
+        
+        # Get user's permitted warehouses
+        user_warehouses = get_user_warehouses()
+        
+        # Apply user permission filter
+        if user_warehouses is not None:
+            if not user_warehouses:
+                return {
+                    "status": "success",
+                    "data": {
+                        "items": [],
+                        "message": "No warehouses assigned to your user."
+                    }
+                }
+            
+            if warehouse:
+                validation = validate_warehouse_access(warehouse, user_warehouses)
+                if not validation["valid"]:
+                    return {"status": "error", "message": validation["message"]}
+                conditions.append(f"sle.warehouse = '{warehouse}'")
+            else:
+                warehouse_list = "', '".join(user_warehouses)
+                conditions.append(f"sle.warehouse IN ('{warehouse_list}')")
+        else:
+            if warehouse:
+                conditions.append(f"sle.warehouse = '{warehouse}'")
+        
         if company:
             conditions.append(f"wh.company = '{company}'")
         if item_code_search:
@@ -3472,9 +4007,9 @@ def get_stock_levels():
             conditions.append(f"item.item_name LIKE '%{item_name_search}%'")
         if general_search:
             conditions.append(f"(item.item_code LIKE '%{general_search}%' OR item.item_name LIKE '%{general_search}%')")
-
+        
         where_clause = " AND ".join(conditions)
-
+        
         query = f"""
             SELECT 
                 item.item_code,
@@ -3503,9 +4038,9 @@ def get_stock_levels():
             WHERE sle.rn = 1 AND {where_clause}
             ORDER BY item.item_code ASC
         """
-
+        
         items = frappe.db.sql(query, as_dict=True)
-
+        
         return {
             "status": "success",
             "data": {
@@ -3522,46 +4057,49 @@ def get_stock_levels():
                 } for i in items]
             }
         }
-
+        
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "Stock Level Error")
         return {"status": "error", "message": str(e)}
 
 
-
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_warehouses():
     """
-    Get list of all warehouses for the warehouse filter dropdown.
+    Get list of warehouses for the dropdown filter.
+    Filtered by user permissions and company.
     
     Query Parameters:
     - company: Filter by company (optional)
     
-    Returns:
-    {
-        "status": "success",
-        "data": [
-            {
-                "warehouse": "MAIN",
-                "warehouse_name": "Main Warehouse"
-            }
-        ]
-    }
+    User Permissions:
+    - Only returns warehouses user has permission to access
+    - Users with "Accounts" role profile see only their assigned warehouses
+    - System Managers and Administrators see all warehouses
     """
-    
     try:
         company = frappe.form_dict.get("company") or frappe.defaults.get_user_default("Company")
         
         conditions = []
+        user_warehouses = get_user_warehouses()
+        
+        if user_warehouses is not None:
+            if not user_warehouses:
+                return {
+                    "status": "success",
+                    "data": [],
+                    "message": "No warehouses assigned to your user."
+                }
+            warehouse_list = "', '".join(user_warehouses)
+            conditions.append(f"name IN ('{warehouse_list}')")
+        
         if company:
             conditions.append(f"company = '{company}'")
         
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
         
         query = f"""
-            SELECT 
-                name as warehouse,
-                warehouse_name
+            SELECT name as warehouse, warehouse_name
             FROM `tabWarehouse`
             {where_clause}
             ORDER BY warehouse_name ASC
@@ -3576,42 +4114,27 @@ def get_warehouses():
         
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "Get Warehouses Error")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        return {"status": "error", "message": str(e)}
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_stock_balance_complete():
     """
-    Get complete stock balance data - combines summary and detailed items in one call.
-    This is useful for loading the entire page with a single API request.
+    Get complete stock balance data with user permission filtering.
+    Combines summary, items, and warehouses in one call.
+    
+    All data automatically filtered by user's warehouse permissions.
     
     Query Parameters:
     - warehouse: Filter by warehouse (optional)
     - company: Filter by company (optional)
     - search: Search items (optional)
-    - limit: Number of items (default: 100)
-    - offset: Pagination offset (default: 0)
     
-    Returns:
-    {
-        "status": "success",
-        "data": {
-            "summary": {
-                "total_items": 7,
-                "total_quantity": 1420,
-                "stock_value": 12110.00,
-                "currency": "SAR"
-            },
-            "items": [...],
-            "warehouses": [...],
-            "pagination": {...}
-        }
-    }
+    User Permissions:
+    - All returned data respects user's warehouse permissions
+    - Users with "Accounts" role profile see only their assigned warehouses
+    - Returns error if user tries to access unauthorized warehouse
     """
-    
     try:
         # Get summary
         summary_response = get_stock_balance_summary()
@@ -3633,14 +4156,133 @@ def get_stock_balance_complete():
             "data": {
                 "summary": summary_response["data"],
                 "items": items_response["data"]["items"],
-                "warehouses": warehouses_response["data"],
-                "pagination": items_response["data"]["pagination"]
+                "warehouses": warehouses_response["data"]
             }
         }
         
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "Get Stock Balance Complete Error")
-        return {
-            "status": "error",
-            "message": str(e)
+        return {"status": "error", "message": str(e)}
+
+
+# ============================================================================
+# DEBUG & UTILITY APIs
+# ============================================================================
+
+@frappe.whitelist(allow_guest=False, methods=["GET"])
+def get_user_permissions_info():
+    """
+    Debug API to check user's complete permissions.
+    Shows sales person, customers, warehouses, and role profile.
+    
+    Returns:
+    {
+        "status": "success",
+        "data": {
+            "user": "user@example.com",
+            "role_profile": "Accounts",
+            "sales_person": "John Doe",
+            "has_sales_person": true,
+            "permitted_customers": ["CUST-001", "CUST-002"],
+            "customer_count": 2,
+            "permitted_warehouses": ["MAIN"],
+            "warehouse_count": 1,
+            "roles": ["Sales User"]
         }
+    }
+    """
+    try:
+        user = frappe.session.user
+        user_doc = frappe.get_doc("User", user)
+        role_profile = user_doc.role_profile_name
+        
+        sales_person = get_user_sales_person(user)
+        user_customers = get_user_customers(user)
+        user_warehouses = get_user_warehouses(user)
+        
+        return {
+            "status": "success",
+            "data": {
+                "user": user,
+                "role_profile": role_profile or "None",
+                "sales_person": sales_person or "None",
+                "has_sales_person": sales_person is not None,
+                "permitted_customers": user_customers if user_customers else ("All customers" if user_customers is None else "No customers"),
+                "customer_count": len(user_customers) if isinstance(user_customers, list) else "All",
+                "permitted_warehouses": user_warehouses if user_warehouses else ("All warehouses" if user_warehouses is None else "No warehouses"),
+                "warehouse_count": len(user_warehouses) if isinstance(user_warehouses, list) else "All",
+                "roles": frappe.get_roles(user),
+                "is_system_manager": "System Manager" in frappe.get_roles(user),
+                "is_administrator": user == "Administrator"
+            }
+        }
+        
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "Get User Permissions Info Error")
+        return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET"])
+def get_user_default_warehouse():
+    """
+    Get the user's default warehouse for creating sales invoices.
+    For users with "Accounts" role profile, returns their assigned warehouse.
+    
+    This should be used to set the "set_warehouse" field in Sales Invoice.
+    
+    Returns:
+    {
+        "status": "success",
+        "data": {
+            "default_warehouse": "MAIN",
+            "all_permitted_warehouses": ["MAIN"],
+            "message": "Use this warehouse for set_warehouse field"
+        }
+    }
+    """
+    try:
+        user = frappe.session.user
+        user_warehouses = get_user_warehouses(user)
+        
+        if user_warehouses is None:
+            return {
+                "status": "success",
+                "data": {
+                    "default_warehouse": None,
+                    "all_permitted_warehouses": "All",
+                    "message": "User has access to all warehouses."
+                }
+            }
+        
+        if not user_warehouses:
+            return {
+                "status": "error",
+                "message": "No warehouses assigned. Cannot create sales invoice.",
+                "data": {
+                    "default_warehouse": None,
+                    "all_permitted_warehouses": []
+                }
+            }
+        
+        if len(user_warehouses) == 1:
+            return {
+                "status": "success",
+                "data": {
+                    "default_warehouse": user_warehouses[0],
+                    "all_permitted_warehouses": user_warehouses,
+                    "message": f"Default warehouse: {user_warehouses[0]}"
+                }
+            }
+        
+        return {
+            "status": "success",
+            "data": {
+                "default_warehouse": user_warehouses[0],
+                "all_permitted_warehouses": user_warehouses,
+                "message": f"Using {user_warehouses[0]} as default. Can select from: {', '.join(user_warehouses)}"
+            }
+        }
+        
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "Get User Default Warehouse Error")
+        return {"status": "error", "message": str(e)}
