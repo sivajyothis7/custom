@@ -456,7 +456,7 @@ def get_item_details():
         # ------------------------------------------------
         item_prices = frappe.get_all(
             "Item Price",
-            filters={"item_code": item_code,"customer": customer,"selling": 1},
+            filters={"item_code": item_code},
             fields=[
                 "price_list",
                 "price_list_rate",
