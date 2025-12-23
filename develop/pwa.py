@@ -381,16 +381,27 @@ def get_items_list():
 def get_item_details():
     """
     API to get detailed information about a specific item
+
+    Pricing Rule:
+    - ONLY price_list = 'Standard Selling'
+    - ONLY for the selected customer
+    - LATEST price by modified / creation
     """
 
     try:
         item_code = frappe.form_dict.get("item_code")
-        customer = frappe.form_dict.get("customer")  # optional
+        customer = frappe.form_dict.get("customer")
 
         if not item_code:
             return {
                 "status": "error",
                 "message": "item_code is required"
+            }
+
+        if not customer:
+            return {
+                "status": "error",
+                "message": "customer is required for pricing"
             }
 
         if not frappe.db.exists("Item", item_code):
@@ -423,12 +434,13 @@ def get_item_details():
         # ------------------------------------------------
         # UOM CONVERSIONS
         # ------------------------------------------------
-        uom_conversions = []
-        for u in item.uoms:
-            uom_conversions.append({
+        uom_conversions = [
+            {
                 "uom": u.uom,
                 "conversion_factor": u.conversion_factor
-            })
+            }
+            for u in item.uoms
+        ]
 
         # ------------------------------------------------
         # STOCK LEVELS (WAREHOUSE RESTRICTED)
@@ -452,11 +464,15 @@ def get_item_details():
             )
 
         # ------------------------------------------------
-        # ITEM PRICES (RAW – FOR REFERENCE)
+        # ITEM PRICES (REFERENCE – STANDARD SELLING ONLY)
         # ------------------------------------------------
         item_prices = frappe.get_all(
             "Item Price",
-            filters={"item_code": item_code, "customer": customer},
+            filters={
+                "item_code": item_code,
+                "price_list": "Standard Selling",
+                "customer": customer
+            },
             fields=[
                 "price_list",
                 "price_list_rate",
@@ -465,99 +481,54 @@ def get_item_details():
                 "customer",
                 "valid_from",
                 "valid_upto",
-                "modified"
+                "modified",
+                "creation"
             ],
-            order_by="modified desc, creation desc",
+            order_by="modified desc, creation desc"
         )
 
         # ------------------------------------------------
-        # RATES (Nos / Carton)
+        # RATES (Nos / Carton) – LATEST STANDARD SELLING
         # ------------------------------------------------
         rates = {"Nos": 0, "Carton": 0}
 
         for uom in ["Nos", "Carton"]:
-            rate = None
+            price_row = frappe.get_all(
+                "Item Price",
+                filters={
+                    "item_code": item_code,
+                    "uom": uom,
+                    "price_list": "Standard Selling",
+                    "customer": customer
+                },
+                fields=["price_list_rate"],
+                order_by="modified desc, creation desc",
+                limit_page_length=1
+            )
 
-            # 1️⃣ Last Sales Invoice rate for customer
-            if customer:
-                res = frappe.db.sql("""
-                    SELECT sii.rate
-                    FROM `tabSales Invoice Item` sii
-                    INNER JOIN `tabSales Invoice` si
-                        ON si.name = sii.parent
-                    WHERE
-                        si.customer = %s
-                        AND sii.item_code = %s
-                        AND sii.uom = %s
-                        AND si.docstatus = 1
-                    ORDER BY si.posting_date DESC, si.creation DESC
-                    LIMIT 1
-                """, (customer, item_code, uom))
-                rate = res[0][0] if res else None
-
-            # 2️⃣ Customer-specific Item Price
-            if rate is None and customer:
-                rate = frappe.db.get_value(
-                    "Item Price",
-                    {
-                        "item_code": item_code,
-                        "uom": uom,
-                        "customer": customer,
-                        "selling": 1
-                    },
-                    "price_list_rate"
-                )
-
-            # 3️⃣ Fallback → Standard Selling Price
-            if rate is None:
-                rate = frappe.db.get_value(
-                    "Item Price",
-                    {
-                        "item_code": item_code,
-                        "uom": uom,
-                        "selling": 1,
-                        "customer": ["is", "not set"]
-                    },
-                    "price_list_rate"
-                )
-
-            rates[uom] = flt(rate or 0)
+            rates[uom] = flt(price_row[0].price_list_rate) if price_row else 0
 
         # ------------------------------------------------
-        # STANDARD RATE (SPECIAL LOGIC)
+        # STANDARD RATE (LATEST – STOCK UOM)
         # ------------------------------------------------
-        resolved_standard_rate = None
+        std_price = frappe.get_all(
+            "Item Price",
+            filters={
+                "item_code": item_code,
+                "uom": item.stock_uom,
+                "price_list": "Standard Selling",
+                "customer": customer
+            },
+            fields=["price_list_rate"],
+            order_by="modified desc, creation desc",
+            limit_page_length=1
+        )
 
-        # 1️⃣ Latest price list for this customer
-        if customer:
-            res = frappe.db.sql("""
-                SELECT ip.price_list_rate
-                FROM `tabItem Price` ip
-                WHERE
-                    ip.item_code = %s
-                    AND ip.customer = %s
-                ORDER BY ip.modified DESC, ip.creation DESC
-                LIMIT 1
-            """, (item_code, customer))
-
-            resolved_standard_rate = res[0][0] if res else None
-
-        # 2️⃣ Second latest price list (no customer)
-        if resolved_standard_rate is None:
-            res = frappe.db.sql("""
-                SELECT ip.price_list_rate
-                FROM `tabItem Price` ip
-                WHERE
-                    ip.item_code = %s
-                    AND ip.customer IS NULL
-                ORDER BY ip.modified DESC, ip.creation DESC
-                LIMIT 1 OFFSET 1
-            """, (item_code,))
-
-            resolved_standard_rate = res[0][0] if res else None
-
-        # 3️⃣ Final fallback
-        standard_rate = flt(resolved_standard_rate or item.standard_rate)
+        standard_rate = (
+            flt(std_price[0].price_list_rate)
+            if std_price
+            else flt(item.standard_rate)
+        )
 
         # ------------------------------------------------
         # RESPONSE
@@ -579,7 +550,6 @@ def get_item_details():
                 "has_variants": item.has_variants,
                 "variant_of": item.variant_of,
 
-                # ✅ Added logic outputs
                 "rates": rates,
 
                 "uom_conversions": uom_conversions,
