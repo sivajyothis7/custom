@@ -3572,7 +3572,6 @@ def validate_customer_access(customer, user_customers):
 def get_customers_list():
     """
     API: Customers list with outstanding balance
-    Output format strictly matches required structure
     """
 
     try:
