@@ -466,7 +466,8 @@ def get_item_details():
                 "valid_from",
                 "valid_upto",
                 "modified"
-            ]
+            ],
+            order_by="modified desc, creation desc",
         )
 
         # ------------------------------------------------
