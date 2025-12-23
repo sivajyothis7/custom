@@ -535,7 +535,6 @@ def get_item_details():
                 FROM `tabItem Price` ip
                 WHERE
                     ip.item_code = %s
-                    AND ip.selling = 1
                     AND ip.customer = %s
                 ORDER BY ip.modified DESC, ip.creation DESC
                 LIMIT 1
@@ -550,7 +549,6 @@ def get_item_details():
                 FROM `tabItem Price` ip
                 WHERE
                     ip.item_code = %s
-                    AND ip.selling = 1
                     AND ip.customer IS NULL
                 ORDER BY ip.modified DESC, ip.creation DESC
                 LIMIT 1 OFFSET 1
