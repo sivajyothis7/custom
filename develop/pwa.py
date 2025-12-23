@@ -296,6 +296,7 @@ def get_items_list():
                 "item_name",
                 "item_group",
                 "stock_uom",
+                "sales_uom",
                 "description",
                 "is_stock_item",
                 "is_sales_item",
@@ -570,6 +571,7 @@ def get_item_details():
                 "item_code": item.item_code,
                 "item_name": item.item_name,
                 "item_group": item.item_group,
+                "sales_uom": item.sales_uom,
                 "stock_uom": item.stock_uom,
                 "description": item.description,
                 "is_stock_item": item.is_stock_item,
@@ -2011,12 +2013,13 @@ def get_payment_entries_list():
     API to list payment entries.
     Draft and Submitted included.
     Cancelled excluded.
-    Latest entries appear first.
+    Restricted to logged-in user.
     """
 
     try:
         filters = {
-            "docstatus": ["!=", 2]   # ✅ Exclude Cancelled only
+            "docstatus": ["!=", 2],   # Exclude Cancelled
+            "owner": frappe.session.user  # 🔐 USER RESTRICTION
         }
 
         party = frappe.form_dict.get("party")
@@ -2083,7 +2086,6 @@ def get_payment_entries_list():
             "status": "error",
             "message": str(e)
         }
-
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
