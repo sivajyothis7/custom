@@ -381,40 +381,39 @@ def get_items_list():
 def get_item_details():
     """
     API to get detailed information about a specific item
-    
-    Method: GET
-    URL: /api/method/your_app.api.get_item_details?item_code=ITEM-001
-    
-    Query Parameters:
-    - item_code: Item code (required)
-    
-    Returns:
-        JSON with item details including UOM conversions and stock levels
     """
+
     try:
         item_code = frappe.form_dict.get("item_code")
-        
+        customer = frappe.form_dict.get("customer")  # optional
+
         if not item_code:
             return {
                 "status": "error",
                 "message": "item_code is required"
             }
-        
+
         if not frappe.db.exists("Item", item_code):
             return {
                 "status": "error",
                 "message": f"Item '{item_code}' not found"
             }
-        
+
         item = frappe.get_doc("Item", item_code)
-        
+
+        # -------------------------
+        # UOM CONVERSIONS
+        # -------------------------
         uom_conversions = []
         for uom in item.uoms:
             uom_conversions.append({
                 "uom": uom.uom,
                 "conversion_factor": uom.conversion_factor
             })
-        
+
+        # -------------------------
+        # STOCK LEVELS
+        # -------------------------
         stock_levels = []
         if item.is_stock_item:
             bins = frappe.get_all(
@@ -429,7 +428,10 @@ def get_item_details():
                 ]
             )
             stock_levels = bins
-        
+
+        # -------------------------
+        # ITEM PRICES (RAW)
+        # -------------------------
         item_prices = frappe.get_all(
             "Item Price",
             filters={"item_code": item_code},
@@ -437,11 +439,58 @@ def get_item_details():
                 "price_list",
                 "price_list_rate",
                 "currency",
+                "uom",
                 "valid_from",
                 "valid_upto"
             ]
         )
-        
+
+        # -------------------------
+        # RATE RESOLUTION (Nos / Carton)
+        # -------------------------
+        rates = {
+            "Nos": 0,
+            "Carton": 0
+        }
+
+        for uom in ["Nos", "Carton"]:
+            rate = None
+
+            # 1️⃣ Last selling rate for this customer
+            if customer:
+                res = frappe.db.sql("""
+                    SELECT sii.rate
+                    FROM `tabSales Invoice Item` sii
+                    INNER JOIN `tabSales Invoice` si
+                        ON si.name = sii.parent
+                    WHERE
+                        si.customer = %s
+                        AND sii.item_code = %s
+                        AND sii.uom = %s
+                        AND si.docstatus = 1
+                    ORDER BY si.posting_date DESC, si.creation DESC
+                    LIMIT 1
+                """, (customer, item_code, uom))
+
+                rate = res[0][0] if res else None
+
+            # 2️⃣ Fallback to Standard Selling Price List
+            if rate is None:
+                rate = frappe.db.get_value(
+                    "Item Price",
+                    {
+                        "item_code": item_code,
+                        "uom": uom,
+                        "selling": 1
+                    },
+                    "price_list_rate"
+                )
+
+            rates[uom] = flt(rate or 0)
+
+        # -------------------------
+        # RESPONSE
+        # -------------------------
         return {
             "status": "success",
             "data": {
@@ -458,6 +507,10 @@ def get_item_details():
                 "disabled": item.disabled,
                 "has_variants": item.has_variants,
                 "variant_of": item.variant_of,
+
+                # ✅ NEW (UOM-wise rates)
+                "rates": rates,
+
                 "uom_conversions": uom_conversions,
                 "stock_levels": stock_levels,
                 "item_prices": item_prices,
@@ -465,7 +518,7 @@ def get_item_details():
                 "modified": str(item.modified)
             }
         }
-        
+
     except Exception as e:
         frappe.log_error("Get Item Details Error", frappe.get_traceback())
         return {
