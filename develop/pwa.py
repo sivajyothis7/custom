@@ -966,7 +966,8 @@ def get_customers_list():
                 "customer_type",
                 "customer_group",
                 "territory",
-                "tax_id",
+                "custom_vat_registration_number",
+                "custom_cr_number",
                 "disabled",
                 "creation",
                 "modified"
@@ -1082,7 +1083,7 @@ def create_customer():
             "customer_type": data.get("customer_type", "Company"),
             "customer_group": data.get("customer_group", "Commercial"),
             "territory": data.get("territory", "Saudi Arabia"),
-            "tax_id": data.get("tax_id")
+            "custom_vat_registration_number": data.get("custom_vat_registration_number")
         })
         customer_doc.insert(ignore_permissions=True)
         frappe.db.commit()
@@ -1095,7 +1096,7 @@ def create_customer():
                 "customer_type": customer_doc.customer_type,
                 "customer_group": customer_doc.customer_group,
                 "territory": customer_doc.territory,
-                "tax_id": customer_doc.tax_id
+                "custom_vat_registration_number": customer_doc.custom_vat_registration_number
             }
         }
         
@@ -1344,7 +1345,7 @@ def get_customer_with_addresses():
             "customer_type": cust.customer_type,
             "customer_group": cust.customer_group,
             "territory": cust.territory,
-            "tax_id": cust.tax_id,
+            "custom_vat_registration_number": cust.custom_vat_registration_number,
             "mobile_no": cust.mobile_no,
             "email_id": cust.email_id
         }
