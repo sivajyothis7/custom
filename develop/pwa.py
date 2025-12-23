@@ -251,126 +251,221 @@ def invalidate_custom_token(token):
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
-def get_items_list():
+def get_item_details():
     """
-    API to list all items with filtering and pagination
+    API to get detailed information about a specific item
     """
 
     try:
-        filters = {}
+        item_code = frappe.form_dict.get("item_code")
+        customer = frappe.form_dict.get("customer")  # optional
 
-        customer = frappe.form_dict.get("customer")
-
-        item_group = frappe.form_dict.get("item_group")
-        if item_group:
-            filters["item_group"] = item_group
-
-        is_stock_item = frappe.form_dict.get("is_stock_item")
-        if is_stock_item is not None:
-            filters["is_stock_item"] = cint(is_stock_item)
-
-        is_sales_item = frappe.form_dict.get("is_sales_item")
-        if is_sales_item is not None:
-            filters["is_sales_item"] = cint(is_sales_item)
-
-        disabled = frappe.form_dict.get("disabled")
-        if disabled is not None:
-            filters["disabled"] = cint(disabled)
-
-        search = frappe.form_dict.get("search")
-        if search:
-            filters["item_code"] = ["like", f"%{search}%"]
-
-        limit = cint(frappe.form_dict.get("limit", 20))
-        offset = cint(frappe.form_dict.get("offset", 0))
-
-        order_by = frappe.form_dict.get("order_by", "item_name")
-        order = frappe.form_dict.get("order", "asc")
-
-        items = frappe.get_all(
-            "Item",
-            filters=filters,
-            fields=[
-                "name",
-                "item_code",
-                "item_name",
-                "item_group",
-                "stock_uom",
-                "description",
-                "is_stock_item",
-                "is_sales_item",
-                "valuation_rate",
-                "standard_rate",
-                "image",
-                "disabled",
-                "creation",
-                "modified"
-            ],
-            order_by=f"{order_by} {order}",
-            limit_page_length=limit,
-            limit_start=offset
-        )
-
-        # -------------------------------
-        # RATE RESOLUTION (Nos / Carton)
-        # -------------------------------
-        for item in items:
-            rates = {
-                "Nos": 0,
-                "Carton": 0
+        if not item_code:
+            return {
+                "status": "error",
+                "message": "item_code is required"
             }
 
-            for uom in ["Nos", "Carton"]:
-                rate = None
+        if not frappe.db.exists("Item", item_code):
+            return {
+                "status": "error",
+                "message": f"Item '{item_code}' not found"
+            }
 
-                # 1️⃣ Last rate for this customer
-                if customer:
-                    rate = frappe.db.sql("""
-                        SELECT sii.rate
-                        FROM `tabSales Invoice Item` sii
-                        INNER JOIN `tabSales Invoice` si
-                            ON si.name = sii.parent
-                        WHERE
-                            si.customer = %s
-                            AND sii.item_code = %s
-                            AND sii.uom = %s
-                            AND si.docstatus = 1
-                        ORDER BY si.posting_date DESC, si.creation DESC
-                        LIMIT 1
-                    """, (customer, item["item_code"], uom))
+        item = frappe.get_doc("Item", item_code)
 
-                    rate = rate[0][0] if rate else None
+        # ------------------------------------------------
+        # USER + WAREHOUSE CONTEXT (Accounts only)
+        # ------------------------------------------------
+        user = frappe.get_doc("User", frappe.session.user)
+        user_warehouse = None
 
-                # 2️⃣ Fallback: Standard Selling Price List
-                if rate is None:
-                    rate = frappe.db.get_value(
-                        "Item Price",
-                        {
-                            "item_code": item["item_code"],
-                            "uom": uom,
-                            "selling": 1
-                        },
-                        "price_list_rate"
-                    )
+        if user.role_profile_name == "Accounts":
+            user_warehouse = frappe.db.get_value(
+                "User Permission",
+                {
+                    "user": frappe.session.user,
+                    "allow": "Warehouse"
+                },
+                "for_value"
+            )
 
-                rates[uom] = flt(rate or 0)
+            if not user_warehouse:
+                frappe.throw("No Warehouse User Permission found for this user")
 
-            # attach rates without breaking structure
-            item["rates"] = rates
+        # ------------------------------------------------
+        # UOM CONVERSIONS
+        # ------------------------------------------------
+        uom_conversions = []
+        for u in item.uoms:
+            uom_conversions.append({
+                "uom": u.uom,
+                "conversion_factor": u.conversion_factor
+            })
 
-        total_count = frappe.db.count("Item", filters=filters)
+        # ------------------------------------------------
+        # STOCK LEVELS (WAREHOUSE RESTRICTED)
+        # ------------------------------------------------
+        stock_filters = {"item_code": item_code}
+        if user_warehouse:
+            stock_filters["warehouse"] = user_warehouse
 
+        stock_levels = []
+        if item.is_stock_item:
+            stock_levels = frappe.get_all(
+                "Bin",
+                filters=stock_filters,
+                fields=[
+                    "warehouse",
+                    "actual_qty",
+                    "reserved_qty",
+                    "ordered_qty",
+                    "projected_qty"
+                ]
+            )
+
+        # ------------------------------------------------
+        # ITEM PRICES (RAW – FOR REFERENCE)
+        # ------------------------------------------------
+        item_prices = frappe.get_all(
+            "Item Price",
+            filters={"item_code": item_code},
+            fields=[
+                "price_list",
+                "price_list_rate",
+                "currency",
+                "uom",
+                "customer",
+                "valid_from",
+                "valid_upto",
+                "modified"
+            ]
+        )
+
+        # ------------------------------------------------
+        # RATES (Nos / Carton)
+        # ------------------------------------------------
+        rates = {"Nos": 0, "Carton": 0}
+
+        for uom in ["Nos", "Carton"]:
+            rate = None
+
+            # 1️⃣ Last Sales Invoice rate for customer
+            if customer:
+                res = frappe.db.sql("""
+                    SELECT sii.rate
+                    FROM `tabSales Invoice Item` sii
+                    INNER JOIN `tabSales Invoice` si
+                        ON si.name = sii.parent
+                    WHERE
+                        si.customer = %s
+                        AND sii.item_code = %s
+                        AND sii.uom = %s
+                        AND si.docstatus = 1
+                    ORDER BY si.posting_date DESC, si.creation DESC
+                    LIMIT 1
+                """, (customer, item_code, uom))
+                rate = res[0][0] if res else None
+
+            # 2️⃣ Customer-specific Item Price
+            if rate is None and customer:
+                rate = frappe.db.get_value(
+                    "Item Price",
+                    {
+                        "item_code": item_code,
+                        "uom": uom,
+                        "customer": customer,
+                        "selling": 1
+                    },
+                    "price_list_rate"
+                )
+
+            # 3️⃣ Fallback → Standard Selling Price
+            if rate is None:
+                rate = frappe.db.get_value(
+                    "Item Price",
+                    {
+                        "item_code": item_code,
+                        "uom": uom,
+                        "selling": 1,
+                        "customer": ["is", "not set"]
+                    },
+                    "price_list_rate"
+                )
+
+            rates[uom] = flt(rate or 0)
+
+        # ------------------------------------------------
+        # STANDARD RATE (SPECIAL LOGIC)
+        # ------------------------------------------------
+        resolved_standard_rate = None
+
+        # 1️⃣ Latest price list for this customer
+        if customer:
+            res = frappe.db.sql("""
+                SELECT ip.price_list_rate
+                FROM `tabItem Price` ip
+                WHERE
+                    ip.item_code = %s
+                    AND ip.selling = 1
+                    AND ip.customer = %s
+                ORDER BY ip.modified DESC, ip.creation DESC
+                LIMIT 1
+            """, (item_code, customer))
+
+            resolved_standard_rate = res[0][0] if res else None
+
+        # 2️⃣ Second latest price list (no customer)
+        if resolved_standard_rate is None:
+            res = frappe.db.sql("""
+                SELECT ip.price_list_rate
+                FROM `tabItem Price` ip
+                WHERE
+                    ip.item_code = %s
+                    AND ip.selling = 1
+                    AND ip.customer IS NULL
+                ORDER BY ip.modified DESC, ip.creation DESC
+                LIMIT 1 OFFSET 1
+            """, (item_code,))
+
+            resolved_standard_rate = res[0][0] if res else None
+
+        # 3️⃣ Final fallback
+        standard_rate = flt(resolved_standard_rate or item.standard_rate)
+
+        # ------------------------------------------------
+        # RESPONSE
+        # ------------------------------------------------
         return {
             "status": "success",
-            "count": len(items),
-            "total": total_count,
-            "limit": limit,
-            "offset": offset,
-            "data": items
+            "data": {
+                "item_code": item.item_code,
+                "item_name": item.item_name,
+                "item_group": item.item_group,
+                "stock_uom": item.stock_uom,
+                "description": item.description,
+                "is_stock_item": item.is_stock_item,
+                "is_sales_item": item.is_sales_item,
+                "valuation_rate": item.valuation_rate,
+                "standard_rate": standard_rate,
+                "image": item.image,
+                "disabled": item.disabled,
+                "has_variants": item.has_variants,
+                "variant_of": item.variant_of,
+
+                # ✅ Added logic outputs
+                "rates": rates,
+
+                "uom_conversions": uom_conversions,
+                "stock_levels": stock_levels,
+                "item_prices": item_prices,
+                "creation": str(item.creation),
+                "modified": str(item.modified)
+            }
         }
 
     except Exception as e:
-        frappe.log_error("Get Items List Error", frappe.get_traceback())
+        frappe.log_error("Get Item Details Error", frappe.get_traceback())
         return {
             "status": "error",
             "message": str(e)
