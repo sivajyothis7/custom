@@ -14,6 +14,29 @@ import json
 from frappe.utils import getdate, flt, cint, nowdate
 from frappe import _
 
+def is_accounts_user():
+    """Check if current user has Role Profile = Accounts"""
+    user = frappe.get_doc("User", frappe.session.user)
+    return user.role_profile_name == "Accounts"
+
+
+def get_user_warehouse():
+    """
+    Get warehouse linked via User Permission for Accounts users
+    """
+    warehouse = frappe.db.get_value(
+        "User Permission",
+        {
+            "user": frappe.session.user,
+            "allow": "Warehouse"
+        },
+        "for_value"
+    )
+
+    if not warehouse:
+        frappe.throw(_("No Warehouse User Permission found for this user"))
+
+    return warehouse
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
@@ -1217,6 +1240,11 @@ def get_sales_invoice_list():
 
     if start_date and end_date:
         filters["posting_date"] = ["between", [start_date, end_date]]
+
+    # 🔐 ADDITION: Accounts users see only their own invoices
+    user = frappe.get_doc("User", frappe.session.user)
+    if user.role_profile_name == "Accounts":
+        filters["owner"] = frappe.session.user
 
     invoice_names = frappe.get_all(
         "Sales Invoice",
