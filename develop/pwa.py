@@ -1491,6 +1491,7 @@ def get_sales_invoice_list():
         pdf_url = (
             f"{base_url}/printview?"
             f"doctype=Sales%20Invoice"
+            f"&trigger_print=1"
             f"&name={doc.name}"
             f"&format={print_format}"
             f"&no_letterhead=0"
@@ -1839,6 +1840,7 @@ def get_invoice_details():
             f"{base_url}/printview?"
             f"doctype=Sales%20Invoice"
             f"&name={doc.name}"
+            f"&trigger_print=1"
             f"&format={print_format}"
             f"&no_letterhead=0"
             f"&download=1"
