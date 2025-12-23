@@ -606,15 +606,16 @@ def get_items_list():
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_item_details():
     """
-    API to get item details with:
+    Get item details with:
     - Stock ONLY from user's warehouse
+    - Item Prices ONLY from Standard Selling
     - Item Prices ONLY created by logged-in user
-    - Price List restricted to 'Standard Selling'
+    - Item Prices ONLY for selected customer or generic (NULL)
     """
 
     try:
         item_code = frappe.form_dict.get("item_code")
-        customer = frappe.form_dict.get("customer")  # optional
+        customer = frappe.form_dict.get("customer")  # MUST be Customer.name
         logged_user = frappe.session.user
 
         if not item_code:
@@ -661,7 +662,6 @@ def get_item_details():
         # STOCK LEVELS (ONLY USER WAREHOUSE)
         # ------------------------------------------------
         stock_levels = []
-
         if item.is_stock_item:
             stock_levels = frappe.get_all(
                 "Bin",
@@ -679,15 +679,22 @@ def get_item_details():
             )
 
         # ------------------------------------------------
-        # ITEM PRICES (Standard Selling + OWNER ONLY)
+        # ITEM PRICES (STRICT FILTER)
         # ------------------------------------------------
+        price_filters = {
+            "item_code": item_code,
+            "price_list": "Standard Selling",
+            "owner": logged_user
+        }
+
+        if customer:
+            price_filters["customer"] = ["in", [customer, None]]
+        else:
+            price_filters["customer"] = ["is", "not set"]
+
         item_prices = frappe.get_all(
             "Item Price",
-            filters={
-                "item_code": item_code,
-                "price_list": "Standard Selling",
-                "owner": logged_user
-            },
+            filters=price_filters,
             fields=[
                 "price_list",
                 "price_list_rate",
@@ -703,14 +710,14 @@ def get_item_details():
         )
 
         # ------------------------------------------------
-        # RATES (Customer → fallback, OWNER ONLY)
+        # RATES (Customer → fallback, SAME FILTER)
         # ------------------------------------------------
         rates = {}
 
         for uom in uoms:
             rate = None
 
-            # 1️⃣ Customer-specific price (created by user)
+            # 1️⃣ Customer-specific price
             if customer:
                 rate = frappe.db.get_value(
                     "Item Price",
@@ -724,7 +731,7 @@ def get_item_details():
                     "price_list_rate"
                 )
 
-            # 2️⃣ Fallback → no-customer price (created by user)
+            # 2️⃣ Generic price (NULL customer)
             if rate is None:
                 rate = frappe.db.get_value(
                     "Item Price",
@@ -741,7 +748,7 @@ def get_item_details():
             rates[uom] = flt(rate or 0)
 
         # ------------------------------------------------
-        # STANDARD RATE
+        # STANDARD RATE (CORRECT)
         # ------------------------------------------------
         standard_rate = (
             rates.get(item.sales_uom)
@@ -769,7 +776,7 @@ def get_item_details():
                 "image": item.image,
                 "disabled": item.disabled,
 
-                # restricted outputs
+                # STRICT outputs
                 "rates": rates,
                 "uom_conversions": uom_conversions,
                 "stock_levels": stock_levels,
@@ -786,7 +793,6 @@ def get_item_details():
             "status": "error",
             "message": str(e)
         }
-
 
 
 
