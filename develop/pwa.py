@@ -254,53 +254,39 @@ def invalidate_custom_token(token):
 def get_items_list():
     """
     API to list all items with filtering and pagination
-    
-    Method: GET
-    URL: /api/method/your_app.api.get_items_list
-    
-    Query Parameters:
-    - item_group: Filter by item group
-    - is_stock_item: 0 or 1
-    - is_sales_item: 0 or 1
-    - disabled: 0 or 1
-    - search: Search by item_code or item_name
-    - limit: Number of items per page (default: 20)
-    - offset: Starting position (default: 0)
-    - order_by: Sort field (default: item_name)
-    - order: asc or desc (default: asc)
-    
-    Returns:
-        JSON with list of items
     """
+
     try:
         filters = {}
-        
+
+        customer = frappe.form_dict.get("customer")
+
         item_group = frappe.form_dict.get("item_group")
         if item_group:
             filters["item_group"] = item_group
-        
+
         is_stock_item = frappe.form_dict.get("is_stock_item")
         if is_stock_item is not None:
             filters["is_stock_item"] = cint(is_stock_item)
-        
+
         is_sales_item = frappe.form_dict.get("is_sales_item")
         if is_sales_item is not None:
             filters["is_sales_item"] = cint(is_sales_item)
-        
+
         disabled = frappe.form_dict.get("disabled")
         if disabled is not None:
             filters["disabled"] = cint(disabled)
-        
+
         search = frappe.form_dict.get("search")
         if search:
             filters["item_code"] = ["like", f"%{search}%"]
-        
+
         limit = cint(frappe.form_dict.get("limit", 20))
         offset = cint(frappe.form_dict.get("offset", 0))
-        
+
         order_by = frappe.form_dict.get("order_by", "item_name")
         order = frappe.form_dict.get("order", "asc")
-        
+
         items = frappe.get_all(
             "Item",
             filters=filters,
@@ -324,9 +310,56 @@ def get_items_list():
             limit_page_length=limit,
             limit_start=offset
         )
-        
+
+        # -------------------------------
+        # RATE RESOLUTION (Nos / Carton)
+        # -------------------------------
+        for item in items:
+            rates = {
+                "Nos": 0,
+                "Carton": 0
+            }
+
+            for uom in ["Nos", "Carton"]:
+                rate = None
+
+                # 1️⃣ Last rate for this customer
+                if customer:
+                    rate = frappe.db.sql("""
+                        SELECT sii.rate
+                        FROM `tabSales Invoice Item` sii
+                        INNER JOIN `tabSales Invoice` si
+                            ON si.name = sii.parent
+                        WHERE
+                            si.customer = %s
+                            AND sii.item_code = %s
+                            AND sii.uom = %s
+                            AND si.docstatus = 1
+                        ORDER BY si.posting_date DESC, si.creation DESC
+                        LIMIT 1
+                    """, (customer, item["item_code"], uom))
+
+                    rate = rate[0][0] if rate else None
+
+                # 2️⃣ Fallback: Standard Selling Price List
+                if rate is None:
+                    rate = frappe.db.get_value(
+                        "Item Price",
+                        {
+                            "item_code": item["item_code"],
+                            "uom": uom,
+                            "selling": 1
+                        },
+                        "price_list_rate"
+                    )
+
+                rates[uom] = flt(rate or 0)
+
+            # attach rates without breaking structure
+            item["rates"] = rates
+
         total_count = frappe.db.count("Item", filters=filters)
-        
+
         return {
             "status": "success",
             "count": len(items),
@@ -335,7 +368,7 @@ def get_items_list():
             "offset": offset,
             "data": items
         }
-        
+
     except Exception as e:
         frappe.log_error("Get Items List Error", frappe.get_traceback())
         return {
