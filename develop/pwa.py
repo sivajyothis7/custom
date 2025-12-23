@@ -1489,7 +1489,7 @@ def get_sales_invoice_list():
 
         # ✅ DIRECT DOWNLOAD PDF URL
         pdf_url = (
-            f"{base_url}/api/method/frappe.utils.print_format.download_pdf?"
+            f"{base_url}/printview?"
             f"doctype=Sales%20Invoice"
             f"&name={doc.name}"
             f"&format={print_format}"
@@ -1834,10 +1834,10 @@ def get_invoice_details():
 
        
         base_url = frappe.utils.get_url()
-        print_format = frappe.utils.quote("Sales Invoice PF")
+        print_format = frappe.utils.quote("Sales%20Invoice%20PF%20OG")
 
         pdf_url = (
-            f"{base_url}/api/method/frappe.utils.print_format.download_pdf?"
+            f"{base_url}/printview?"
             f"doctype=Sales%20Invoice"
             f"&name={doc.name}"
             f"&format={print_format}"
