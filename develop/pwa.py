@@ -3916,3 +3916,103 @@ def get_stock_balance_complete():
             "status": "error",
             "message": str(e)
         }
+
+@frappe.whitelist(allow_guest=False, methods=["GET"])
+def get_stock_balance():
+    """
+    Get stock balance of items from the logged-in user's warehouse
+    """
+
+    try:
+        # -----------------------------
+        # USER CONTEXT
+        # -----------------------------
+        user = frappe.session.user
+
+        warehouse = frappe.db.get_value(
+            "User Permission",
+            {
+                "user": user,
+                "allow": "Warehouse"
+            },
+            "for_value"
+        )
+
+        if not warehouse:
+            frappe.throw("No Warehouse User Permission found for this user")
+
+        # -----------------------------
+        # OPTIONAL FILTERS
+        # -----------------------------
+        search = frappe.form_dict.get("search")
+        item_group = frappe.form_dict.get("item_group")
+
+        limit = int(frappe.form_dict.get("limit", 20))
+        offset = int(frappe.form_dict.get("offset", 0))
+
+        # -----------------------------
+        # BUILD CONDITIONS
+        # -----------------------------
+        conditions = ["b.warehouse = %(warehouse)s"]
+        values = {"warehouse": warehouse}
+
+        if search:
+            conditions.append(
+                "(i.item_code LIKE %(search)s OR i.item_name LIKE %(search)s)"
+            )
+            values["search"] = f"%{search}%"
+
+        if item_group:
+            conditions.append("i.item_group = %(item_group)s")
+            values["item_group"] = item_group
+
+        condition_str = " AND ".join(conditions)
+
+        # -----------------------------
+        # MAIN QUERY
+        # -----------------------------
+        data = frappe.db.sql(f"""
+            SELECT
+                i.item_code,
+                i.item_name,
+                i.item_group,
+                i.stock_uom,
+                b.actual_qty,
+                b.reserved_qty,
+                b.ordered_qty,
+                b.projected_qty,
+                b.modified
+            FROM `tabBin` b
+            INNER JOIN `tabItem` i ON i.name = b.item_code
+            WHERE {condition_str}
+            ORDER BY i.item_name
+            LIMIT %(limit)s OFFSET %(offset)s
+        """, {**values, "limit": limit, "offset": offset}, as_dict=True)
+
+        # -----------------------------
+        # TOTAL COUNT
+        # -----------------------------
+        total = frappe.db.sql(f"""
+            SELECT COUNT(*)
+            FROM `tabBin` b
+            INNER JOIN `tabItem` i ON i.name = b.item_code
+            WHERE {condition_str}
+        """, values)[0][0]
+
+        # -----------------------------
+        # RESPONSE
+        # -----------------------------
+        return {
+            "status": "success",
+            "warehouse": warehouse,
+            "count": len(data),
+            "total": total,
+            "data": data
+        }
+
+    except Exception as e:
+        frappe.log_error("Get Stock Balance Error", frappe.get_traceback())
+        return {
+            "status": "error",
+            "message": str(e)
+        }
