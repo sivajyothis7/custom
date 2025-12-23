@@ -423,13 +423,12 @@ def get_item_details():
         # ------------------------------------------------
         # UOM CONVERSIONS
         # ------------------------------------------------
-        uom_conversions = [
-            {
+        uom_conversions = []
+        for u in item.uoms:
+            uom_conversions.append({
                 "uom": u.uom,
                 "conversion_factor": u.conversion_factor
-            }
-            for u in item.uoms
-        ]
+            })
 
         # ------------------------------------------------
         # STOCK LEVELS (WAREHOUSE RESTRICTED)
@@ -453,25 +452,11 @@ def get_item_details():
             )
 
         # ------------------------------------------------
-        # PRICE FILTER (STANDARD SELLING ONLY)
-        # ------------------------------------------------
-        price_filters = {
-            "item_code": item_code,
-            "selling": 1,
-            "price_list": "Standard Selling"
-        }
-
-        if customer:
-            price_filters["customer"] = ["in", [customer, None]]
-        else:
-            price_filters["customer"] = ["is", "not set"]
-
-        # ------------------------------------------------
-        # ITEM PRICES (LATEST FIRST – REFERENCE)
+        # ITEM PRICES (RAW – FOR REFERENCE)
         # ------------------------------------------------
         item_prices = frappe.get_all(
             "Item Price",
-            filters=price_filters,
+            filters={"item_code": item_code, "customer": customer},
             fields=[
                 "price_list",
                 "price_list_rate",
@@ -482,47 +467,99 @@ def get_item_details():
                 "valid_upto",
                 "modified"
             ],
-            order_by="modified desc, creation desc"
+            order_by="modified desc, creation desc",
         )
 
         # ------------------------------------------------
-        # RATES (Nos / Carton) – LATEST STANDARD SELLING
+        # RATES (Nos / Carton)
         # ------------------------------------------------
         rates = {"Nos": 0, "Carton": 0}
 
         for uom in ["Nos", "Carton"]:
-            rate = frappe.db.get_value(
-                "Item Price",
-                {
-                    "item_code": item_code,
-                    "uom": uom,
-                    "selling": 1,
-                    "price_list": "Standard Selling",
-                    "customer": ["in", [customer, None]]
-                },
-                "price_list_rate",
-                order_by="modified desc, creation desc"
-            )
+            rate = None
+
+            # 1️⃣ Last Sales Invoice rate for customer
+            if customer:
+                res = frappe.db.sql("""
+                    SELECT sii.rate
+                    FROM `tabSales Invoice Item` sii
+                    INNER JOIN `tabSales Invoice` si
+                        ON si.name = sii.parent
+                    WHERE
+                        si.customer = %s
+                        AND sii.item_code = %s
+                        AND sii.uom = %s
+                        AND si.docstatus = 1
+                    ORDER BY si.posting_date DESC, si.creation DESC
+                    LIMIT 1
+                """, (customer, item_code, uom))
+                rate = res[0][0] if res else None
+
+            # 2️⃣ Customer-specific Item Price
+            if rate is None and customer:
+                rate = frappe.db.get_value(
+                    "Item Price",
+                    {
+                        "item_code": item_code,
+                        "uom": uom,
+                        "customer": customer,
+                        "selling": 1
+                    },
+                    "price_list_rate"
+                )
+
+            # 3️⃣ Fallback → Standard Selling Price
+            if rate is None:
+                rate = frappe.db.get_value(
+                    "Item Price",
+                    {
+                        "item_code": item_code,
+                        "uom": uom,
+                        "selling": 1,
+                        "customer": ["is", "not set"]
+                    },
+                    "price_list_rate"
+                )
 
             rates[uom] = flt(rate or 0)
 
         # ------------------------------------------------
-        # STANDARD RATE (LATEST STANDARD SELLING – NOS)
+        # STANDARD RATE (SPECIAL LOGIC)
         # ------------------------------------------------
-        standard_rate = frappe.db.get_value(
-            "Item Price",
-            {
-                "item_code": item_code,
-                "uom": item.stock_uom,
-                "selling": 1,
-                "price_list": "Standard Selling",
-                "customer": ["in", [customer, None]]
-            },
-            "price_list_rate",
-            order_by="modified desc, creation desc"
-        )
+        resolved_standard_rate = None
 
-        standard_rate = flt(standard_rate or item.standard_rate)
+        # 1️⃣ Latest price list for this customer
+        if customer:
+            res = frappe.db.sql("""
+                SELECT ip.price_list_rate
+                FROM `tabItem Price` ip
+                WHERE
+                    ip.item_code = %s
+                    AND ip.selling = 1
+                    AND ip.customer = %s
+                ORDER BY ip.modified DESC, ip.creation DESC
+                LIMIT 1
+            """, (item_code, customer))
+
+            resolved_standard_rate = res[0][0] if res else None
+
+        # 2️⃣ Second latest price list (no customer)
+        if resolved_standard_rate is None:
+            res = frappe.db.sql("""
+                SELECT ip.price_list_rate
+                FROM `tabItem Price` ip
+                WHERE
+                    ip.item_code = %s
+                    AND ip.selling = 1
+                    AND ip.customer IS NULL
+                ORDER BY ip.modified DESC, ip.creation DESC
+                LIMIT 1 OFFSET 1
+            """, (item_code,))
+
+            resolved_standard_rate = res[0][0] if res else None
+
+        # 3️⃣ Final fallback
+        standard_rate = flt(resolved_standard_rate or item.standard_rate)
 
         # ------------------------------------------------
         # RESPONSE
@@ -544,6 +581,7 @@ def get_item_details():
                 "has_variants": item.has_variants,
                 "variant_of": item.variant_of,
 
+                # ✅ Added logic outputs
                 "rates": rates,
 
                 "uom_conversions": uom_conversions,
