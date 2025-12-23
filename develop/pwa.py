@@ -3571,95 +3571,94 @@ def validate_customer_access(customer, user_customers):
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_customers_list():
     """
-    Get list of customers filtered by sales person assignment.
-    
-    Query Parameters:
-    - search: Search in customer name or customer_name (optional)
-    - limit: Number of records (default: 100)
-    - offset: Pagination offset (default: 0)
-    
-    Filtering Logic:
-    - System Manager/Administrator: See ALL customers
-    - Sales Person users: See only customers in their sales_team
-    - Accounts role profile: See ALL customers
-    - Walk-In Customer: Always included for sales persons
-    - Other users: See no customers (empty list)
+    API: Customers list with outstanding balance
+    Output format strictly matches required structure
     """
+
     try:
         search = frappe.form_dict.get("search")
-        limit = cint(frappe.form_dict.get("limit", 100))
-        offset = cint(frappe.form_dict.get("offset", 0))
-        
-        # Get user's permitted customers
+
         user_customers = get_user_customers()
-        
+
         conditions = []
-        
+        values = []
+
+        # --------------------------
+        # SALES PERSON FILTER
+        # --------------------------
         if user_customers is not None:
             if not user_customers:
                 return {
-                    "status": "success",
-                    "data": {
-                        "customers": [],
-                        "message": "No customers assigned to your sales person.",
-                        "pagination": {
-                            "limit": limit,
-                            "offset": offset,
-                            "count": 0,
-                            "total": 0
-                        }
+                    "message": {
+                        "status": "success",
+                        "count": 0,
+                        "data": []
                     }
                 }
-            
-            # Filter by permitted customers
-            customer_list = "', '".join(user_customers)
-            conditions.append(f"name IN ('{customer_list}')")
-        
+
+            placeholders = ", ".join(["%s"] * len(user_customers))
+            conditions.append(f"c.name IN ({placeholders})")
+            values.extend(user_customers)
+
+        # --------------------------
+        # SEARCH FILTER
+        # --------------------------
         if search:
-            conditions.append(f"(name LIKE '%{search}%' OR customer_name LIKE '%{search}%')")
-        
-        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
-        
-        # Get customers
-        query = f"""
-            SELECT 
-                name as customer,
-                customer_name,
-                customer_type,
-                territory,
-                customer_group
-            FROM `tabCustomer`
+            conditions.append("(c.name LIKE %s OR c.customer_name LIKE %s)")
+            values.extend([f"%{search}%", f"%{search}%"])
+
+        where_clause = ""
+        if conditions:
+            where_clause = "WHERE " + " AND ".join(conditions)
+
+        # --------------------------
+        # MAIN QUERY
+        # --------------------------
+        customers = frappe.db.sql(
+            f"""
+            SELECT
+                c.name,
+                c.customer_name,
+                c.customer_type,
+                c.customer_group,
+                c.territory,
+                c.tax_id,
+                c.disabled,
+                c.creation,
+                c.modified,
+                IFNULL(SUM(si.outstanding_amount), 0) AS outstanding_amount
+            FROM
+                `tabCustomer` c
+            LEFT JOIN
+                `tabSales Invoice` si
+                ON si.customer = c.name
+                AND si.docstatus = 1
             {where_clause}
-            ORDER BY customer_name ASC
-            LIMIT {limit} OFFSET {offset}
-        """
-        
-        customers = frappe.db.sql(query, as_dict=True)
-        
-        # Get total count
-        count_query = f"""
-            SELECT COUNT(*) as total
-            FROM `tabCustomer`
-            {where_clause}
-        """
-        total = frappe.db.sql(count_query, as_dict=True)[0]['total']
-        
+            GROUP BY
+                c.name
+            ORDER BY
+                c.customer_name ASC
+            """,
+            values,
+            as_dict=True
+        )
+
         return {
-            "status": "success",
-            "data": {
-                "customers": customers,
-                "pagination": {
-                    "limit": limit,
-                    "offset": offset,
-                    "count": len(customers),
-                    "total": cint(total)
-                }
+            "message": {
+                "status": "success",
+                "count": len(customers),
+                "data": customers
             }
         }
-        
+
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "Get Customers Error")
-        return {"status": "error", "message": str(e)}
+        return {
+            "message": {
+                "status": "error",
+                "message": str(e)
+            }
+        }
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
