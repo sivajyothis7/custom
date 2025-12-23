@@ -1241,10 +1241,22 @@ def get_sales_invoice_list():
     if start_date and end_date:
         filters["posting_date"] = ["between", [start_date, end_date]]
 
-    # 🔐 ADDITION: Accounts users see only their own invoices
+    # 🔐 ADDITION: Accounts users see invoices only for their warehouse
     user = frappe.get_doc("User", frappe.session.user)
     if user.role_profile_name == "Accounts":
-        filters["owner"] = frappe.session.user
+        user_warehouse = frappe.db.get_value(
+            "User Permission",
+            {
+                "user": frappe.session.user,
+                "allow": "Warehouse"
+            },
+            "for_value"
+        )
+
+        if not user_warehouse:
+            frappe.throw("No Warehouse User Permission found for this user")
+
+        filters["set_warehouse"] = user_warehouse
 
     invoice_names = frappe.get_all(
         "Sales Invoice",
@@ -1257,7 +1269,7 @@ def get_sales_invoice_list():
     invoice_list = []
 
     # ✅ Encode the format safely
-    print_format = frappe.utils.quote("Sales Invoice PF")
+    print_format = frappe.utils.quote("Sales Invoice PF OG")
 
     for inv in invoice_names:
         doc = frappe.get_doc("Sales Invoice", inv.name)
