@@ -3580,28 +3580,43 @@ def get_sales_return_details():
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_sales_returns_list():
     """
-    Get list of all Sales Returns.
+    Get list of Sales Returns restricted by logged-in user.
 
-    Filters:
-    - customer
-    - from_date
-    - to_date
-    - status (0=Draft, 1=Submitted, 2=Cancelled)
-    - original_invoice
-
-    Returns:
-    - Full list (no pagination)
-    - Latest first
+    - Accounts users → warehouse-based restriction
+    - Others → owner-based restriction
     """
 
     try:
         filters = {"is_return": 1}
 
-        # Customer filter
+        user = frappe.get_doc("User", frappe.session.user)
+
+        # --------------------------------
+        # 🔐 USER-BASED RESTRICTION
+        # --------------------------------
+        if user.role_profile_name == "Accounts":
+            warehouse = frappe.db.get_value(
+                "User Permission",
+                {
+                    "user": frappe.session.user,
+                    "allow": "Warehouse"
+                },
+                "for_value"
+            )
+
+            if not warehouse:
+                frappe.throw("No Warehouse User Permission found for this user")
+
+            filters["set_warehouse"] = warehouse
+        else:
+            filters["owner"] = frappe.session.user
+
+        # --------------------------------
+        # OPTIONAL FILTERS
+        # --------------------------------
         if frappe.form_dict.get("customer"):
             filters["customer"] = frappe.form_dict.get("customer")
 
-        # Date range filter
         from_date = frappe.form_dict.get("from_date")
         to_date = frappe.form_dict.get("to_date")
 
@@ -3612,15 +3627,15 @@ def get_sales_returns_list():
         elif to_date:
             filters["posting_date"] = ["<=", to_date]
 
-        # Status filter
-        if frappe.form_dict.get("status"):
+        if frappe.form_dict.get("status") is not None:
             filters["docstatus"] = cint(frappe.form_dict.get("status"))
 
-        # Original invoice filter
         if frappe.form_dict.get("original_invoice"):
             filters["return_against"] = frappe.form_dict.get("original_invoice")
 
-        # Fetch all (NO LIMIT)
+        # --------------------------------
+        # FETCH RETURNS
+        # --------------------------------
         returns = frappe.get_all(
             "Sales Invoice",
             filters=filters,
@@ -3632,12 +3647,16 @@ def get_sales_returns_list():
                 "return_against",
                 "grand_total",
                 "outstanding_amount",
-                "docstatus"
+                "docstatus",
+                "set_warehouse",
+                "owner"
             ],
             order_by="posting_date desc, modified desc"
         )
 
-        # Add readable status
+        # --------------------------------
+        # STATUS LABEL
+        # --------------------------------
         for ret in returns:
             ret["status"] = (
                 "Draft" if ret.docstatus == 0 else
@@ -3653,11 +3672,10 @@ def get_sales_returns_list():
 
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "Get Sales Returns List Error")
-        return {"status": "error", "message": str(e)}
-
-
-
-
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
