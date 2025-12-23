@@ -1241,22 +1241,10 @@ def get_sales_invoice_list():
     if start_date and end_date:
         filters["posting_date"] = ["between", [start_date, end_date]]
 
-    # 🔐 ADDITION: Accounts users see invoices only for their warehouse
+    # 🔐 ADDITION: Accounts users see only their own invoices
     user = frappe.get_doc("User", frappe.session.user)
     if user.role_profile_name == "Accounts":
-        user_warehouse = frappe.db.get_value(
-            "User Permission",
-            {
-                "user": frappe.session.user,
-                "allow": "Warehouse"
-            },
-            "for_value"
-        )
-
-        if not user_warehouse:
-            frappe.throw("No Warehouse User Permission found for this user")
-
-        filters["set_warehouse"] = user_warehouse
+        filters["owner"] = frappe.session.user
 
     invoice_names = frappe.get_all(
         "Sales Invoice",
@@ -1359,29 +1347,13 @@ def create_sales_invoice():
         due_date = getdate(data.get("due_date") or posting_date)
 
         update_stock = cint(data.get("update_stock", 0))
-
-        # 🔐 FORCE WAREHOUSE FOR ACCOUNTS USERS
-        user = frappe.get_doc("User", frappe.session.user)
-        if user.role_profile_name == "Accounts":
-            target_warehouse = frappe.db.get_value(
-                "User Permission",
-                {
-                    "user": frappe.session.user,
-                    "allow": "Warehouse"
-                },
-                "for_value"
-            )
-
-            if not target_warehouse:
-                frappe.throw("No Warehouse User Permission found for this user")
-        else:
-            target_warehouse = data.get("target_warehouse") or get_default_warehouse(company)
+        target_warehouse = data.get("target_warehouse") or get_default_warehouse(company)
 
         custom_mode_of_payment = data.get("custom_mode_of_payment")
 
         if custom_mode_of_payment and not frappe.db.exists("Mode of Payment", custom_mode_of_payment):
             return {
-                "status": "error",
+                "status": "error", 
                 "message": f"Mode of Payment '{custom_mode_of_payment}' not found"
             }
 
@@ -1421,7 +1393,6 @@ def create_sales_invoice():
                 "cost_center": cost_center
             }
 
-            # 🔐 FORCE ITEM WAREHOUSE
             if update_stock and target_warehouse:
                 row["warehouse"] = target_warehouse
 
@@ -1474,10 +1445,8 @@ def create_sales_invoice():
             doc.taxes = tax_rows
             doc.taxes_and_charges = resolved_tax_template
             doc.update_stock = update_stock
-
             if target_warehouse:
                 doc.set_warehouse = target_warehouse
-
             if custom_mode_of_payment:
                 doc.custom_mode_of_payment = custom_mode_of_payment
 
@@ -1496,12 +1465,14 @@ def create_sales_invoice():
                 "items": invoice_items,
                 "taxes": tax_rows,
                 "taxes_and_charges": resolved_tax_template,
-                "custom_mode_of_payment": custom_mode_of_payment,
-                "set_warehouse": target_warehouse
+                "custom_mode_of_payment": custom_mode_of_payment
             })
 
             if data.get("naming_series"):
                 doc.naming_series = data["naming_series"]
+
+            if target_warehouse:
+                doc.set_warehouse = target_warehouse
 
         # ---------------------------
         # APPLY DISCOUNT ✅
@@ -1568,6 +1539,7 @@ def create_sales_invoice():
         frappe.db.rollback()
         frappe.log_error(frappe.get_traceback(), "Sales Invoice API Error")
         return {"status": "error", "message": str(e)}
+
 
 
 
