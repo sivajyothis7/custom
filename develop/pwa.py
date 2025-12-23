@@ -731,7 +731,7 @@ def build_consolidated_taxes(company):
 
 
 @frappe.whitelist(allow_guest=True, methods=["GET"])
-def get_customer_list():
+def get_customers_list():
     """
     API: Customers list with calculated outstanding balance
     """
@@ -3569,7 +3569,7 @@ def validate_customer_access(customer, user_customers):
 # ============================================================================
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
-def get_customers_list():
+def get_customer_list():
     """
     API: Customers list with outstanding balance
     """
