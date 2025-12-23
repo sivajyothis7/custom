@@ -780,6 +780,7 @@ def get_customers_list():
             fields=[
                 "name",
                 "customer_name",
+                "custom_customer_name_english",
                 "customer_type",
                 "customer_group",
                 "territory",
@@ -788,7 +789,7 @@ def get_customers_list():
                 "creation",
                 "modified"
             ],
-            order_by="customer_name asc"
+            order_by="custom_customer_name_english asc"
         )
 
         # --------------------------
