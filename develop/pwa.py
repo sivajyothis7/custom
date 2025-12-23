@@ -423,12 +423,13 @@ def get_item_details():
         # ------------------------------------------------
         # UOM CONVERSIONS
         # ------------------------------------------------
-        uom_conversions = []
-        for u in item.uoms:
-            uom_conversions.append({
+        uom_conversions = [
+            {
                 "uom": u.uom,
                 "conversion_factor": u.conversion_factor
-            })
+            }
+            for u in item.uoms
+        ]
 
         # ------------------------------------------------
         # STOCK LEVELS (WAREHOUSE RESTRICTED)
@@ -452,11 +453,22 @@ def get_item_details():
             )
 
         # ------------------------------------------------
-        # ITEM PRICES (RAW – FOR REFERENCE)
+        # ITEM PRICES (ONLY STANDARD SELLING + CUSTOMER)
         # ------------------------------------------------
+        price_filters = {
+            "item_code": item_code,
+            "selling": 1,
+            "price_list": "Standard Selling"
+        }
+
+        if customer:
+            price_filters["customer"] = ["in", [customer, None]]
+        else:
+            price_filters["customer"] = ["is", "not set"]
+
         item_prices = frappe.get_all(
             "Item Price",
-            filters={"item_code": item_code},
+            filters=price_filters,
             fields=[
                 "price_list",
                 "price_list_rate",
@@ -467,18 +479,18 @@ def get_item_details():
                 "valid_upto",
                 "modified"
             ],
-            order_by="modified desc, creation desc",
+            order_by="modified desc, creation desc"
         )
 
         # ------------------------------------------------
-        # RATES (Nos / Carton)
+        # RATES (Nos / Carton) – LATEST ONLY
         # ------------------------------------------------
         rates = {"Nos": 0, "Carton": 0}
 
         for uom in ["Nos", "Carton"]:
             rate = None
 
-            # 1️⃣ Last Sales Invoice rate for customer
+            # Latest Sales Invoice rate (customer)
             if customer:
                 res = frappe.db.sql("""
                     SELECT sii.rate
@@ -495,20 +507,7 @@ def get_item_details():
                 """, (customer, item_code, uom))
                 rate = res[0][0] if res else None
 
-            # 2️⃣ Customer-specific Item Price
-            if rate is None and customer:
-                rate = frappe.db.get_value(
-                    "Item Price",
-                    {
-                        "item_code": item_code,
-                        "uom": uom,
-                        "customer": customer,
-                        "selling": 1
-                    },
-                    "price_list_rate"
-                )
-
-            # 3️⃣ Fallback → Standard Selling Price
+            # Latest Item Price (Standard Selling + customer/null)
             if rate is None:
                 rate = frappe.db.get_value(
                     "Item Price",
@@ -516,50 +515,31 @@ def get_item_details():
                         "item_code": item_code,
                         "uom": uom,
                         "selling": 1,
-                        "customer": ["is", "not set"]
+                        "price_list": "Standard Selling",
+                        "customer": ["in", [customer, None]]
                     },
-                    "price_list_rate"
+                    "price_list_rate",
+                    order_by="modified desc, creation desc"
                 )
 
             rates[uom] = flt(rate or 0)
 
         # ------------------------------------------------
-        # STANDARD RATE (SPECIAL LOGIC)
+        # STANDARD RATE (LATEST – SAME RULE)
         # ------------------------------------------------
-        resolved_standard_rate = None
+        standard_rate = frappe.db.get_value(
+            "Item Price",
+            {
+                "item_code": item_code,
+                "selling": 1,
+                "price_list": "Standard Selling",
+                "customer": ["in", [customer, None]]
+            },
+            "price_list_rate",
+            order_by="modified desc, creation desc"
+        )
 
-        # 1️⃣ Latest price list for this customer
-        if customer:
-            res = frappe.db.sql("""
-                SELECT ip.price_list_rate
-                FROM `tabItem Price` ip
-                WHERE
-                    ip.item_code = %s
-                    AND ip.selling = 1
-                    AND ip.customer = %s
-                ORDER BY ip.modified DESC, ip.creation DESC
-                LIMIT 1
-            """, (item_code, customer))
-
-            resolved_standard_rate = res[0][0] if res else None
-
-        # 2️⃣ Second latest price list (no customer)
-        if resolved_standard_rate is None:
-            res = frappe.db.sql("""
-                SELECT ip.price_list_rate
-                FROM `tabItem Price` ip
-                WHERE
-                    ip.item_code = %s
-                    AND ip.selling = 1
-                    AND ip.customer IS NULL
-                ORDER BY ip.modified DESC, ip.creation DESC
-                LIMIT 1 OFFSET 1
-            """, (item_code,))
-
-            resolved_standard_rate = res[0][0] if res else None
-
-        # 3️⃣ Final fallback
-        standard_rate = flt(resolved_standard_rate or item.standard_rate)
+        standard_rate = flt(standard_rate or item.standard_rate)
 
         # ------------------------------------------------
         # RESPONSE
@@ -581,7 +561,6 @@ def get_item_details():
                 "has_variants": item.has_variants,
                 "variant_of": item.variant_of,
 
-                # ✅ Added logic outputs
                 "rates": rates,
 
                 "uom_conversions": uom_conversions,
@@ -917,6 +896,7 @@ def build_consolidated_taxes(company):
 def get_customers_list():
     """
     API: Customers list with calculated outstanding balance
+    Filtered by logged-in user's Sales Person mapping
     """
 
     try:
@@ -934,6 +914,39 @@ def get_customers_list():
         if disabled is not None:
             filters["disabled"] = cint(disabled)
 
+        # -------------------------------------------------
+        # SALES PERSON FILTER (USER → SALES PERSON → CUSTOMER)
+        # -------------------------------------------------
+        sales_person = frappe.db.get_value(
+            "Sales Person",
+            {"user": frappe.session.user},
+            "name"
+        )
+
+        customer_names = None
+
+        if sales_person:
+            customer_names = frappe.db.sql("""
+                SELECT DISTINCT parent
+                FROM `tabSales Team`
+                WHERE sales_person = %s
+            """, sales_person, as_list=True)
+
+            customer_names = [c[0] for c in customer_names]
+
+            # If sales person exists but no customers assigned
+            if not customer_names:
+                return {
+                    "status": "success",
+                    "count": 0,
+                    "data": []
+                }
+
+            filters["name"] = ["in", customer_names]
+
+        # -------------------------------------------------
+        # FETCH CUSTOMERS
+        # -------------------------------------------------
         customers = frappe.get_all(
             "Customer",
             filters=filters,
@@ -952,9 +965,9 @@ def get_customers_list():
             order_by="custom_customer_name_english asc"
         )
 
-        # --------------------------
+        # -------------------------------------------------
         # GET OUTSTANDING BALANCE
-        # --------------------------
+        # -------------------------------------------------
         for cust in customers:
             outstanding = frappe.db.sql("""
                 SELECT SUM(outstanding_amount)
@@ -977,7 +990,6 @@ def get_customers_list():
             "status": "error",
             "message": str(e)
         }
-
 
 @frappe.whitelist(allow_guest=False, methods=["POST"])
 def create_customer():
