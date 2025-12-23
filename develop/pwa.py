@@ -402,6 +402,25 @@ def get_item_details():
         item = frappe.get_doc("Item", item_code)
 
         # -------------------------
+        # USER + WAREHOUSE CONTEXT
+        # -------------------------
+        user = frappe.get_doc("User", frappe.session.user)
+        user_warehouse = None
+
+        if user.role_profile_name == "Accounts":
+            user_warehouse = frappe.db.get_value(
+                "User Permission",
+                {
+                    "user": frappe.session.user,
+                    "allow": "Warehouse"
+                },
+                "for_value"
+            )
+
+            if not user_warehouse:
+                frappe.throw("No Warehouse User Permission found for this user")
+
+        # -------------------------
         # UOM CONVERSIONS
         # -------------------------
         uom_conversions = []
@@ -412,13 +431,19 @@ def get_item_details():
             })
 
         # -------------------------
-        # STOCK LEVELS
+        # STOCK LEVELS (WAREHOUSE-WISE)
         # -------------------------
+        stock_filters = {"item_code": item_code}
+
+        # 🔐 Accounts users → only their warehouse
+        if user_warehouse:
+            stock_filters["warehouse"] = user_warehouse
+
         stock_levels = []
         if item.is_stock_item:
-            bins = frappe.get_all(
+            stock_levels = frappe.get_all(
                 "Bin",
-                filters={"item_code": item_code},
+                filters=stock_filters,
                 fields=[
                     "warehouse",
                     "actual_qty",
@@ -427,7 +452,6 @@ def get_item_details():
                     "projected_qty"
                 ]
             )
-            stock_levels = bins
 
         # -------------------------
         # ITEM PRICES (RAW)
@@ -440,6 +464,7 @@ def get_item_details():
                 "price_list_rate",
                 "currency",
                 "uom",
+                "customer",
                 "valid_from",
                 "valid_upto"
             ]
@@ -474,14 +499,28 @@ def get_item_details():
 
                 rate = res[0][0] if res else None
 
-            # 2️⃣ Fallback to Standard Selling Price List
+            # 2️⃣ Customer-specific Item Price
+            if rate is None and customer:
+                rate = frappe.db.get_value(
+                    "Item Price",
+                    {
+                        "item_code": item_code,
+                        "uom": uom,
+                        "customer": customer,
+                        "selling": 1
+                    },
+                    "price_list_rate"
+                )
+
+            # 3️⃣ Fallback → Standard Selling Price List
             if rate is None:
                 rate = frappe.db.get_value(
                     "Item Price",
                     {
                         "item_code": item_code,
                         "uom": uom,
-                        "selling": 1
+                        "selling": 1,
+                        "customer": ["is", "not set"]
                     },
                     "price_list_rate"
                 )
@@ -508,7 +547,7 @@ def get_item_details():
                 "has_variants": item.has_variants,
                 "variant_of": item.variant_of,
 
-                # ✅ NEW (UOM-wise rates)
+                # ✅ UOM-wise resolved rates
                 "rates": rates,
 
                 "uom_conversions": uom_conversions,
@@ -525,6 +564,7 @@ def get_item_details():
             "status": "error",
             "message": str(e)
         }
+
 
 
 @frappe.whitelist(allow_guest=False, methods=["POST"])
