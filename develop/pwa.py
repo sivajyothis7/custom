@@ -1516,7 +1516,7 @@ def get_sales_invoice_list():
 
     return {
         "status_code": 200,
-        "print_format": "Sales Invoice PF",
+        "print_format": "Sales Invoice PF OG", 
         "count": len(invoice_list),
         "invoices": invoice_list
     }
@@ -1834,8 +1834,7 @@ def get_invoice_details():
 
        
         base_url = frappe.utils.get_url()
-        print_format = frappe.utils.quote("Sales%20Invoice%20PF%20OG")
-
+        print_format = frappe.utils.quote("Sales Invoice PF OG")
         pdf_url = (
             f"{base_url}/printview?"
             f"doctype=Sales%20Invoice"
