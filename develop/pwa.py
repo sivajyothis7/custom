@@ -1961,6 +1961,9 @@ def create_sales_invoice():
                     "rate": i.rate,
                     "amount": i.amount,
                     "uom": i.uom,
+                    "stock_uom": i.stock_uom,
+                    "conversion_factor": i.conversion_factor,
+                    "stock_qty": i.stock_qty,
                     "description": i.description
                 } for i in doc.items],
 
@@ -2014,6 +2017,9 @@ def get_invoice_details():
                 "description": item.description,
                 "qty": item.qty,
                 "uom": item.uom,
+                "stock_uom": i.stock_uom,
+                "conversion_factor": item.conversion_factor,
+                "stock_qty": item.stock_qty,
                 "rate": item.rate,
                 "amount": item.amount,
                 "warehouse": item.warehouse
