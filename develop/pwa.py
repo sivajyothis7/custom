@@ -2017,7 +2017,7 @@ def get_invoice_details():
                 "description": item.description,
                 "qty": item.qty,
                 "uom": item.uom,
-                "stock_uom": i.stock_uom,
+                "stock_uom": item.stock_uom,
                 "conversion_factor": item.conversion_factor,
                 "stock_qty": item.stock_qty,
                 "rate": item.rate,
