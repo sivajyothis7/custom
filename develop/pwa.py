@@ -1985,11 +1985,16 @@ def create_sales_invoice():
 
 
 
+import frappe
+from frappe.utils import getdate
+from frappe import _
+
+
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_invoice_details():
     """
     API to get Sales Invoice details with direct PDF download link
-    Print Format: Sales Invoice PF
+    Print Format: Sales Invoice PF OG
     """
 
     try:
@@ -2007,25 +2012,45 @@ def get_invoice_details():
                 "message": f"Invoice '{invoice_name}' not found"
             }
 
+        # -------------------------
+        # FETCH INVOICE
+        # -------------------------
         doc = frappe.get_doc("Sales Invoice", invoice_name)
 
+        # -------------------------
+        # CUSTOMER ENGLISH NAME
+        # -------------------------
+        customer_name_english = frappe.db.get_value(
+            "Customer",
+            doc.customer,
+            "custom_customer_name_english"
+        ) or ""
+
+        # -------------------------
+        # ITEMS
+        # -------------------------
         items = []
         for item in doc.items:
             items.append({
                 "item_code": item.item_code,
                 "item_name": item.item_name,
                 "description": item.description,
+
                 "qty": item.qty,
                 "uom": item.uom,
+
                 "stock_uom": item.stock_uom,
                 "conversion_factor": item.conversion_factor,
                 "stock_qty": item.stock_qty,
+
                 "rate": item.rate,
                 "amount": item.amount,
                 "warehouse": item.warehouse
             })
 
-       
+        # -------------------------
+        # TAXES
+        # -------------------------
         taxes = []
         for tax in doc.taxes:
             taxes.append({
@@ -2036,9 +2061,12 @@ def get_invoice_details():
                 "tax_amount": tax.tax_amount
             })
 
-       
+        # -------------------------
+        # PDF URL
+        # -------------------------
         base_url = frappe.utils.get_url()
         print_format = frappe.utils.quote("Sales Invoice PF OG")
+
         pdf_url = (
             f"{base_url}/printview?"
             f"doctype=Sales%20Invoice"
@@ -2049,13 +2077,18 @@ def get_invoice_details():
             f"&download=1"
         )
 
-      
+        # -------------------------
+        # RESPONSE
+        # -------------------------
         return {
             "status": "success",
             "data": {
                 "invoice_name": doc.name,
+
                 "customer": doc.customer,
-                "customer_name": doc.customer_name,
+                "customer_name": doc.customer_name,                  # Arabic
+                "customer_name_english": customer_name_english,     # English ✅
+
                 "company": doc.company,
 
                 "posting_date": str(doc.posting_date),
@@ -2079,12 +2112,11 @@ def get_invoice_details():
         }
 
     except Exception as e:
-        frappe.log_error("Get Invoice Details Error", frappe.get_traceback())
+        frappe.log_error(frappe.get_traceback(), "Get Invoice Details Error")
         return {
             "status": "error",
             "message": str(e)
         }
-
 
 
 @frappe.whitelist(allow_guest=False, methods=["POST"])
