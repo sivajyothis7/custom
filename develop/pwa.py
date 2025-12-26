@@ -1727,15 +1727,11 @@ from frappe.utils import flt, cint, getdate
 
 
 def get_conversion_factor(item_code, uom):
-    """
-    Fetch conversion factor for an item + UOM
-    """
     if not item_code or not uom:
         return 1
 
     stock_uom = frappe.db.get_value("Item", item_code, "stock_uom")
 
-    # Same UOM → factor = 1
     if uom == stock_uom:
         return 1
 
@@ -1758,21 +1754,13 @@ def get_conversion_factor(item_code, uom):
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def create_sales_invoice():
-    """
-    Create or update Sales Invoice with:
-    - Auto item creation
-    - Auto tax template
-    - Auto UOM conversion
-    - Stock update
-    - Discount support
-    """
 
     try:
         data = json.loads(frappe.request.data) if frappe.request.data else frappe.form_dict
 
-        # ---------------------------
+        # --------------------------------------------------
         # VALIDATION
-        # ---------------------------
+        # --------------------------------------------------
         for field in ["customer_name", "company", "items"]:
             if not data.get(field):
                 return {"status": "error", "message": f"'{field}' is required"}
@@ -1788,9 +1776,9 @@ def create_sales_invoice():
         if not company_doc.default_income_account or not company_doc.default_receivable_account:
             return {"status": "error", "message": "Company missing default accounts"}
 
-        # ---------------------------
+        # --------------------------------------------------
         # CUSTOMER
-        # ---------------------------
+        # --------------------------------------------------
         create_or_update_customer({
             "customer_name": customer_name,
             "customer_type": data.get("customer_type", "Company"),
@@ -1803,9 +1791,22 @@ def create_sales_invoice():
         due_date = getdate(data.get("due_date") or posting_date)
         update_stock = cint(data.get("update_stock", 0))
 
-        # ---------------------------
+        # --------------------------------------------------
+        # CUSTOM MODE OF PAYMENT ✅
+        # --------------------------------------------------
+        custom_mode_of_payment = data.get("custom_mode_of_payment")
+
+        if custom_mode_of_payment and not frappe.db.exists(
+            "Mode of Payment", custom_mode_of_payment
+        ):
+            return {
+                "status": "error",
+                "message": f"Mode of Payment '{custom_mode_of_payment}' not found"
+            }
+
+        # --------------------------------------------------
         # FORCE WAREHOUSE FOR ACCOUNTS
-        # ---------------------------
+        # --------------------------------------------------
         user = frappe.get_doc("User", frappe.session.user)
 
         if user.role_profile_name == "Accounts":
@@ -1823,9 +1824,9 @@ def create_sales_invoice():
         else:
             target_warehouse = data.get("target_warehouse") or get_default_warehouse(company)
 
-        # ---------------------------
-        # ITEMS
-        # ---------------------------
+        # --------------------------------------------------
+        # BUILD ITEMS
+        # --------------------------------------------------
         invoice_items = []
 
         for item in data.get("items"):
@@ -1869,9 +1870,9 @@ def create_sales_invoice():
 
             invoice_items.append(row)
 
-        # ---------------------------
+        # --------------------------------------------------
         # TAX TEMPLATE
-        # ---------------------------
+        # --------------------------------------------------
         tax_template = frappe.db.get_value(
             "Sales Taxes and Charges Template",
             {
@@ -1898,9 +1899,9 @@ def create_sales_invoice():
             "cost_center": company_doc.cost_center
         } for t in tpl.taxes]
 
-        # ---------------------------
-        # CREATE / UPDATE
-        # ---------------------------
+        # --------------------------------------------------
+        # CREATE / UPDATE INVOICE
+        # --------------------------------------------------
         invoice_name = data.get("invoice_name")
 
         if invoice_name and frappe.db.exists("Sales Invoice", invoice_name):
@@ -1910,10 +1911,14 @@ def create_sales_invoice():
                 return {"status": "error", "message": "Invoice already submitted"}
 
             doc.customer = customer_name
+            doc.company = company
+            doc.posting_date = posting_date
+            doc.due_date = due_date
             doc.items = invoice_items
             doc.taxes = tax_rows
             doc.update_stock = update_stock
             doc.set_warehouse = target_warehouse
+            doc.custom_mode_of_payment = custom_mode_of_payment
 
         else:
             doc = frappe.get_doc({
@@ -1927,14 +1932,15 @@ def create_sales_invoice():
                 "ignore_pricing_rule": 1,
                 "update_stock": update_stock,
                 "set_warehouse": target_warehouse,
+                "custom_mode_of_payment": custom_mode_of_payment,
                 "items": invoice_items,
                 "taxes": tax_rows,
                 "taxes_and_charges": tax_template
             })
 
-        # ---------------------------
+        # --------------------------------------------------
         # DISCOUNT
-        # ---------------------------
+        # --------------------------------------------------
         if data.get("discount_amount"):
             doc.discount_amount = flt(data.get("discount_amount"))
             doc.apply_discount_on = data.get("apply_discount_on", "Grand Total")
@@ -1949,14 +1955,15 @@ def create_sales_invoice():
         doc.insert(ignore_permissions=True) if not doc.name else doc.save(ignore_permissions=True)
         frappe.db.commit()
 
-        # ---------------------------
+        # --------------------------------------------------
         # RESPONSE
-        # ---------------------------
+        # --------------------------------------------------
         return {
             "status": "success",
-            "invoice": doc.name,
+            "invoice_name": doc.name,
+            "custom_mode_of_payment": doc.custom_mode_of_payment,
             "grand_total": doc.grand_total,
-            "vat": doc.total_taxes_and_charges,
+            "vat_amount": doc.total_taxes_and_charges,
             "items": [{
                 "item_code": i.item_code,
                 "qty": i.qty,
