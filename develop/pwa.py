@@ -2315,37 +2315,39 @@ def get_payment_entries_list():
         }
 
 
+import frappe
+from frappe.utils import get_url
+
+
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_payment_entry_details():
     """
     API to get detailed information about a specific payment entry
-    
+    with direct PDF download link
+
     Method: GET
     URL: /api/method/your_app.api.get_payment_entry_details?payment_entry=PE-00001
-    
-    Query Parameters:
-    - payment_entry: Payment Entry name (required)
-    
-    Returns:
-        JSON with payment entry details including references
     """
+
     try:
         payment_entry_name = frappe.form_dict.get("payment_entry")
-        
+
         if not payment_entry_name:
             return {
                 "status": "error",
                 "message": "payment_entry is required"
             }
-        
+
         if not frappe.db.exists("Payment Entry", payment_entry_name):
             return {
                 "status": "error",
                 "message": f"Payment Entry '{payment_entry_name}' not found"
             }
-        
+
+       
         pe = frappe.get_doc("Payment Entry", payment_entry_name)
-        
+
+       
         references = []
         for ref in pe.references:
             references.append({
@@ -2356,9 +2358,10 @@ def get_payment_entry_details():
                 "allocated_amount": ref.allocated_amount,
                 "exchange_rate": ref.exchange_rate
             })
+
         
         deductions = []
-        if hasattr(pe, 'deductions'):
+        if hasattr(pe, "deductions"):
             for ded in pe.deductions:
                 deductions.append({
                     "account": ded.account,
@@ -2366,55 +2369,81 @@ def get_payment_entry_details():
                     "amount": ded.amount,
                     "description": ded.description
                 })
+
         
+        base_url = get_url()
+        print_format = frappe.utils.quote("Receipt voucher")
+
+        pdf_url = (
+            f"{base_url}/printview?"
+            f"doctype=Payment%20Entry"
+            f"&name={pe.name}"
+            f"&trigger_print=1"
+            f"&format={print_format}"
+            f"&no_letterhead=0"
+            f"&download=1"
+        )
+
+        # -------------------------
+        # RESPONSE
+        # -------------------------
         return {
             "status": "success",
             "data": {
                 "name": pe.name,
                 "posting_date": str(pe.posting_date),
+
                 "payment_type": pe.payment_type,
                 "party_type": pe.party_type,
                 "party": pe.party,
                 "party_name": pe.party_name,
                 "company": pe.company,
-                
+
                 "paid_from": pe.paid_from,
                 "paid_from_account_currency": pe.paid_from_account_currency,
                 "paid_to": pe.paid_to,
                 "paid_to_account_currency": pe.paid_to_account_currency,
-                
+
                 "paid_amount": pe.paid_amount,
                 "received_amount": pe.received_amount,
                 "source_exchange_rate": pe.source_exchange_rate,
                 "target_exchange_rate": pe.target_exchange_rate,
-                
+
                 "mode_of_payment": pe.mode_of_payment,
                 "reference_no": pe.reference_no,
                 "reference_date": str(pe.reference_date) if pe.reference_date else None,
-                
+
                 "total_allocated_amount": pe.total_allocated_amount,
                 "unallocated_amount": pe.unallocated_amount,
                 "difference_amount": pe.difference_amount,
-                
+
                 "docstatus": pe.docstatus,
-                "status": "Draft" if pe.docstatus == 0 else "Submitted" if pe.docstatus == 1 else "Cancelled",
-                
+                "status": (
+                    "Draft" if pe.docstatus == 0
+                    else "Submitted" if pe.docstatus == 1
+                    else "Cancelled"
+                ),
+
                 "remarks": pe.remarks,
-                
+
                 "references": references,
                 "deductions": deductions,
-                
+
+                "pdf_url": pdf_url,   
+
                 "creation": str(pe.creation),
                 "modified": str(pe.modified)
             }
         }
-        
+
     except Exception as e:
-        frappe.log_error("Get Payment Entry Details Error", frappe.get_traceback())
+        frappe.log_error(frappe.get_traceback(), "Get Payment Entry Details Error")
         return {
             "status": "error",
             "message": str(e)
         }
+
+
 
 
 @frappe.whitelist(allow_guest=False, methods=["POST"])
