@@ -2084,6 +2084,7 @@ def get_invoice_details():
                 "customer_name_english": customer_name_english,     # English ✅
 
                 "company": doc.company,
+                "custom_mode_of_payment": custom_mode_of_payment,
 
                 "posting_date": str(doc.posting_date),
                 "due_date": str(doc.due_date),
@@ -2210,7 +2211,6 @@ def submit_sales_invoice():
         })
 
         pe.insert(ignore_permissions=True)
-        pe.submit()
         frappe.db.commit()
 
        
