@@ -2021,6 +2021,11 @@ def get_invoice_details():
         ) or ""
 
         # -------------------------
+        # MODE OF PAYMENT  ✅ FIX
+        # -------------------------
+        custom_mode_of_payment = doc.get("custom_mode_of_payment")
+
+        # -------------------------
         # ITEMS
         # -------------------------
         items = []
@@ -2080,11 +2085,11 @@ def get_invoice_details():
                 "invoice_name": doc.name,
 
                 "customer": doc.customer,
-                "customer_name": doc.customer_name,                  # Arabic
-                "customer_name_english": customer_name_english,     # English ✅
+                "customer_name": doc.customer_name,              # Arabic
+                "customer_name_english": customer_name_english, # English
 
                 "company": doc.company,
-                "custom_mode_of_payment": custom_mode_of_payment,
+                "custom_mode_of_payment": custom_mode_of_payment,  # ✅ now works
 
                 "posting_date": str(doc.posting_date),
                 "due_date": str(doc.due_date),
@@ -2112,6 +2117,7 @@ def get_invoice_details():
             "status": "error",
             "message": str(e)
         }
+
 
 
 @frappe.whitelist(allow_guest=False, methods=["POST"])
