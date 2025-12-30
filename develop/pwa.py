@@ -2120,20 +2120,27 @@ def get_invoice_details():
 
 
 
+import json
+import frappe
+from frappe.utils import getdate
+
+
 @frappe.whitelist(allow_guest=False, methods=["POST"])
 def submit_sales_invoice():
     """
     Final submission logic:
-    - Submit invoice first
-    - If custom_mode_of_payment = Credit → no payment entry
-    - If Cash/Bank/POS → create Payment Entry AFTER invoice is submitted
+    - Submit Sales Invoice
+    - Credit → No Payment Entry
+    - Cash / POS → Draft Payment Entry
+    - Bank → Draft Payment Entry with:
+        reference_no   = Invoice No
+        reference_date = Today
     """
 
     try:
         data = json.loads(frappe.request.data) if frappe.request.data else frappe.form_dict
 
         invoice_name = data.get("invoice_name")
-
         if not invoice_name:
             return {"status": "error", "message": "invoice_name is required"}
 
@@ -2151,11 +2158,15 @@ def submit_sales_invoice():
 
         payment_mode_lower = payment_mode.lower().strip()
 
-      
+        # -------------------------------------------------
+        # SUBMIT INVOICE FIRST
+        # -------------------------------------------------
         inv.submit()
         frappe.db.commit()
 
-       
+        # -------------------------------------------------
+        # CREDIT → NO PAYMENT ENTRY
+        # -------------------------------------------------
         if payment_mode_lower == "credit":
             return {
                 "status": "success",
@@ -2166,76 +2177,101 @@ def submit_sales_invoice():
                 }
             }
 
-      
-
+        # -------------------------------------------------
+        # FETCH ACCOUNTS
+        # -------------------------------------------------
         receivable_account = frappe.db.get_value(
             "Company", inv.company, "default_receivable_account"
         )
 
         if not receivable_account:
-            return {"status": "error", "message": "Default Receivable Account missing in Company settings"}
+            frappe.throw("Default Receivable Account missing in Company")
 
         payment_account = frappe.db.get_value(
             "Mode of Payment Account",
-            {"parent": payment_mode, "company": inv.company},
+            {
+                "parent": payment_mode,
+                "company": inv.company
+            },
             "default_account"
         )
 
         if not payment_account:
-            return {
-                "status": "error",
-                "message": f"No account found under Mode of Payment '{payment_mode}'. Configure it under Mode of Payment → Accounts."
-            }
+            frappe.throw(
+                f"No account configured for Mode of Payment '{payment_mode}'"
+            )
 
-       
+        # -------------------------------------------------
+        # BANK MODE → AUTO REFERENCE
+        # -------------------------------------------------
+        mop_type = frappe.db.get_value(
+            "Mode of Payment",
+            payment_mode,
+            "type"
+        )
+
+        if mop_type == "Bank":
+            reference_no = inv.name          # ✅ Invoice No
+            reference_date = getdate()       # ✅ Today
+        else:
+            reference_no = None
+            reference_date = None
+
+        # -------------------------------------------------
+        # CREATE PAYMENT ENTRY (DRAFT)
+        # -------------------------------------------------
         pe = frappe.get_doc({
             "doctype": "Payment Entry",
             "payment_type": "Receive",
             "posting_date": inv.posting_date,
             "company": inv.company,
+
             "party_type": "Customer",
             "party": inv.customer,
 
-            "paid_from": receivable_account,     
-            "paid_to": payment_account,            
+            "paid_from": receivable_account,
+            "paid_to": payment_account,
 
             "mode_of_payment": payment_mode,
 
             "paid_amount": inv.grand_total,
             "received_amount": inv.grand_total,
 
-            "references": [
-                {
-                    "reference_doctype": "Sales Invoice",
-                    "reference_name": inv.name,
-                    "total_amount": inv.grand_total,
-                    "outstanding_amount": inv.outstanding_amount,
-                    "exchange_rate": 1,
-                    "allocated_amount": inv.grand_total
-                }
-            ]
+            # ✅ Mandatory for Bank
+            "reference_no": reference_no,
+            "reference_date": reference_date,
+
+            "references": [{
+                "reference_doctype": "Sales Invoice",
+                "reference_name": inv.name,
+                "total_amount": inv.grand_total,
+                "outstanding_amount": inv.outstanding_amount,
+                "allocated_amount": inv.grand_total,
+                "exchange_rate": 1
+            }]
         })
 
+        # DRAFT only
         pe.insert(ignore_permissions=True)
         frappe.db.commit()
 
-       
         return {
             "status": "success",
-            "message": "Invoice and Payment Entry submitted successfully",
+            "message": "Invoice submitted. Payment Entry created as Draft.",
             "data": {
                 "invoice_name": inv.name,
-                "payment_entry": pe.name
+                "payment_entry": pe.name,
+                "payment_entry_status": "Draft"
             }
         }
 
     except Exception as e:
         frappe.db.rollback()
         frappe.log_error(frappe.get_traceback(), "Submit Sales Invoice Error")
-        return {"status": "error", "message": str(e)}
-
-
-
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 
 
