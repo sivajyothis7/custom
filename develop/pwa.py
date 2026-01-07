@@ -608,18 +608,20 @@ def get_item_details():
     """
     Get item details with:
     - Stock ONLY from user's warehouse
-    - Item Prices ONLY from Standard Selling
-    - Item Prices ONLY created by logged-in user
-    - Item Prices ONLY for selected customer or generic (NULL)
+    - Prices from Standard Selling
+    - Priority: logged-in user's price → existing customer price
     """
 
     try:
         item_code = frappe.form_dict.get("item_code")
-        customer = frappe.form_dict.get("customer")  # MUST be Customer.name
+        customer = frappe.form_dict.get("customer")  # Customer.name
         logged_user = frappe.session.user
 
         if not item_code:
             return {"status": "error", "message": "item_code is required"}
+
+        if not customer:
+            return {"status": "error", "message": "customer is required"}
 
         if not frappe.db.exists("Item", item_code):
             return {
@@ -652,7 +654,7 @@ def get_item_details():
             for u in item.uoms
         ]
 
-        # Collect all UOMs
+        # Collect all UOMs (stock + extra)
         uoms = [item.stock_uom]
         for u in item.uoms:
             if u.uom not in uoms:
@@ -679,76 +681,78 @@ def get_item_details():
             )
 
         # ------------------------------------------------
-        # ITEM PRICES (STRICT FILTER)
+        # ITEM PRICES (FOR DISPLAY)
         # ------------------------------------------------
-        price_filters = {
-            "item_code": item_code,
-            "price_list": "Standard Selling",
-            "owner": logged_user
-        }
-
-        if customer:
-            price_filters["customer"] = ["in", [customer, None]]
-        else:
-            price_filters["customer"] = ["is", "not set"]
-
         item_prices = frappe.get_all(
             "Item Price",
-            filters=price_filters,
+            filters={
+                "item_code": item_code,
+                "price_list": "Standard Selling",
+                "customer": customer
+            },
             fields=[
                 "price_list",
                 "price_list_rate",
                 "currency",
                 "uom",
                 "customer",
+                "owner",
                 "valid_from",
                 "valid_upto",
-                "owner",
-                "modified"
+                "modified",
+                "creation"
             ],
             order_by="modified desc, creation desc"
         )
 
         # ------------------------------------------------
-        # RATES (Customer → fallback, SAME FILTER)
+        # RATES (OWNER FIRST → FALLBACK)
         # ------------------------------------------------
         rates = {}
 
         for uom in uoms:
             rate = None
 
-            # 1️⃣ Customer-specific price
-            if customer:
-                rate = frappe.db.get_value(
+            # 1️⃣ Latest price by logged-in user
+            price_row = frappe.get_all(
+                "Item Price",
+                filters={
+                    "item_code": item_code,
+                    "price_list": "Standard Selling",
+                    "uom": uom,
+                    "customer": customer,
+                    "owner": logged_user
+                },
+                fields=["price_list_rate"],
+                order_by="modified desc, creation desc",
+                limit_page_length=1
+            )
+
+            if price_row:
+                rate = price_row[0].price_list_rate
+
+            # 2️⃣ Fallback → existing price for customer (any owner)
+            if rate is None:
+                price_row = frappe.get_all(
                     "Item Price",
-                    {
+                    filters={
                         "item_code": item_code,
                         "price_list": "Standard Selling",
                         "uom": uom,
-                        "customer": customer,
-                        "owner": logged_user
+                        "customer": customer
                     },
-                    "price_list_rate"
+                    fields=["price_list_rate"],
+                    order_by="modified desc, creation desc",
+                    limit_page_length=1
                 )
 
-            # 2️⃣ Generic price (NULL customer)
-            if rate is None:
-                rate = frappe.db.get_value(
-                    "Item Price",
-                    {
-                        "item_code": item_code,
-                        "price_list": "Standard Selling",
-                        "uom": uom,
-                        "customer": ["is", "not set"],
-                        "owner": logged_user
-                    },
-                    "price_list_rate"
-                )
+                if price_row:
+                    rate = price_row[0].price_list_rate
 
             rates[uom] = flt(rate or 0)
 
         # ------------------------------------------------
-        # STANDARD RATE (CORRECT)
+        # STANDARD RATE (FINAL)
         # ------------------------------------------------
         standard_rate = (
             rates.get(item.sales_uom)
@@ -773,10 +777,8 @@ def get_item_details():
                 "is_sales_item": item.is_sales_item,
                 "valuation_rate": item.valuation_rate,
                 "standard_rate": standard_rate,
-                "image": item.image,
                 "disabled": item.disabled,
 
-                # STRICT outputs
                 "rates": rates,
                 "uom_conversions": uom_conversions,
                 "stock_levels": stock_levels,
@@ -793,7 +795,6 @@ def get_item_details():
             "status": "error",
             "message": str(e)
         }
-
 
 
 @frappe.whitelist(allow_guest=False, methods=["POST"])
@@ -3295,20 +3296,22 @@ def get_customer_billing_and_payments():
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_today_sales():
-    """Today's sales invoice total"""
+    """Today's sales invoice total (logged-in user only)"""
 
     try:
         today = frappe.utils.today()
+        current_user = frappe.session.user
 
         data = frappe.db.sql("""
             SELECT
-                COUNT(name) as invoice_count,
-                SUM(grand_total) as total_sales
+                COUNT(name) AS invoice_count,
+                SUM(grand_total) AS total_sales
             FROM `tabSales Invoice`
             WHERE
                 posting_date = %s
                 AND docstatus = 1
-        """, today, as_dict=True)[0]
+                AND owner = %s
+        """, (today, current_user), as_dict=True)[0]
 
         return {
             "status": "success",
@@ -3319,26 +3322,32 @@ def get_today_sales():
 
     except Exception as e:
         frappe.log_error("Today Sales API Error", frappe.get_traceback())
-        return {"status": "error", "message": str(e)}
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_today_collection():
-    """Today's total collection"""
+    """Today's total collection (logged-in user only)"""
 
     try:
         today = frappe.utils.today()
+        current_user = frappe.session.user
 
         data = frappe.db.sql("""
             SELECT
-                COUNT(name) as payment_count,
-                SUM(received_amount) as total_collection
+                COUNT(name) AS payment_count,
+                SUM(paid_amount) AS total_collection
             FROM `tabPayment Entry`
             WHERE
                 posting_date = %s
                 AND docstatus = 1
                 AND payment_type = 'Receive'
-        """, today, as_dict=True)[0]
+                AND owner = %s
+        """, (today, current_user), as_dict=True)[0]
 
         return {
             "status": "success",
@@ -3349,30 +3358,34 @@ def get_today_collection():
 
     except Exception as e:
         frappe.log_error("Today Collection API Error", frappe.get_traceback())
-        return {"status": "error", "message": str(e)}
-
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_today_cash_collection():
-    """Today's CASH collection"""
+    """Today's CASH collection (logged-in user only)"""
 
     try:
         today = frappe.utils.today()
+        current_user = frappe.session.user
 
         data = frappe.db.sql("""
             SELECT
-                COUNT(name) as payment_count,
-                SUM(received_amount) as cash_collection
+                COUNT(name) AS payment_count,
+                SUM(paid_amount) AS cash_collection
             FROM `tabPayment Entry`
             WHERE
                 posting_date = %s
                 AND docstatus = 1
                 AND payment_type = 'Receive'
                 AND mode_of_payment = 'Cash'
-        """, today, as_dict=True)[0]
+                AND owner = %s
+        """, (today, current_user), as_dict=True)[0]
 
         return {
             "status": "success",
@@ -3383,29 +3396,37 @@ def get_today_cash_collection():
 
     except Exception as e:
         frappe.log_error("Cash Collection API Error", frappe.get_traceback())
-        return {"status": "error", "message": str(e)}
-
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_today_bank_collection():
-    """Today's BANK collection"""
+    """Today's BANK collection (logged-in user only)"""
 
     try:
         today = frappe.utils.today()
+        current_user = frappe.session.user
 
         data = frappe.db.sql("""
             SELECT
-                COUNT(name) as payment_count,
-                SUM(received_amount) as bank_collection
+                COUNT(name) AS payment_count,
+                SUM(paid_amount) AS bank_collection
             FROM `tabPayment Entry`
             WHERE
                 posting_date = %s
                 AND docstatus = 1
                 AND payment_type = 'Receive'
-                AND mode_of_payment = 'Bank Draft'
-        """, today, as_dict=True)[0]
+                AND mode_of_payment IN (
+                    'Bank Transfer (Alrajhi)',
+                    'Bank Transfer (NCB)',
+                    'Bank Transfer (Alinma)'
+                )
+                AND owner = %s
+        """, (today, current_user), as_dict=True)[0]
 
         return {
             "status": "success",
@@ -3416,8 +3437,10 @@ def get_today_bank_collection():
 
     except Exception as e:
         frappe.log_error("Bank Collection API Error", frappe.get_traceback())
-        return {"status": "error", "message": str(e)}
-
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 
 
