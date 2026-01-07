@@ -609,19 +609,40 @@ def get_item_details():
     Get item details with:
     - Stock ONLY from user's warehouse
     - Prices from Standard Selling
+    - Customer resolved via custom_customer_name_english
     - Priority: logged-in user's price → existing customer price
     """
 
     try:
         item_code = frappe.form_dict.get("item_code")
-        customer = frappe.form_dict.get("customer")  # Customer.name
+        customer_english = frappe.form_dict.get("customer")  # English customer name
         logged_user = frappe.session.user
 
         if not item_code:
             return {"status": "error", "message": "item_code is required"}
 
+        # ------------------------------------------------
+        # 🔑 RESOLVE CUSTOMER (custom_customer_name_english → Customer.name)
+        # ------------------------------------------------
+        customer_english = (customer_english or "").strip()
+
+        if not customer_english:
+            return {"status": "error", "message": "customer (english name) is required"}
+
+        customer = frappe.db.get_value(
+            "Customer",
+            {"custom_customer_name_english": customer_english},
+            "name"
+        )
+
         if not customer:
-            return {"status": "error", "message": "customer is required"}
+            return {
+                "status": "error",
+                "message": (
+                    f"Customer with English name "
+                    f"'{customer_english}' not found"
+                )
+            }
 
         if not frappe.db.exists("Item", item_code):
             return {
@@ -647,14 +668,8 @@ def get_item_details():
             frappe.throw("No Warehouse User Permission found for this user")
 
         # ------------------------------------------------
-        # UOM CONVERSIONS
+        # UOMs
         # ------------------------------------------------
-        uom_conversions = [
-            {"uom": u.uom, "conversion_factor": u.conversion_factor}
-            for u in item.uoms
-        ]
-
-        # Collect all UOMs (stock + extra)
         uoms = [item.stock_uom]
         for u in item.uoms:
             if u.uom not in uoms:
@@ -681,7 +696,7 @@ def get_item_details():
             )
 
         # ------------------------------------------------
-        # ITEM PRICES (FOR DISPLAY)
+        # ITEM PRICES (DISPLAY)
         # ------------------------------------------------
         item_prices = frappe.get_all(
             "Item Price",
@@ -714,7 +729,7 @@ def get_item_details():
             rate = None
 
             # 1️⃣ Latest price by logged-in user
-            price_row = frappe.get_all(
+            row = frappe.get_all(
                 "Item Price",
                 filters={
                     "item_code": item_code,
@@ -728,12 +743,12 @@ def get_item_details():
                 limit_page_length=1
             )
 
-            if price_row:
-                rate = price_row[0].price_list_rate
+            if row:
+                rate = row[0].price_list_rate
 
-            # 2️⃣ Fallback → existing price for customer (any owner)
+            # 2️⃣ Fallback → existing customer price (any owner)
             if rate is None:
-                price_row = frappe.get_all(
+                row = frappe.get_all(
                     "Item Price",
                     filters={
                         "item_code": item_code,
@@ -746,13 +761,13 @@ def get_item_details():
                     limit_page_length=1
                 )
 
-                if price_row:
-                    rate = price_row[0].price_list_rate
+                if row:
+                    rate = row[0].price_list_rate
 
             rates[uom] = flt(rate or 0)
 
         # ------------------------------------------------
-        # STANDARD RATE (FINAL)
+        # STANDARD RATE
         # ------------------------------------------------
         standard_rate = (
             rates.get(item.sales_uom)
@@ -777,10 +792,10 @@ def get_item_details():
                 "is_sales_item": item.is_sales_item,
                 "valuation_rate": item.valuation_rate,
                 "standard_rate": standard_rate,
+                "image": item.image,
                 "disabled": item.disabled,
 
                 "rates": rates,
-                "uom_conversions": uom_conversions,
                 "stock_levels": stock_levels,
                 "item_prices": item_prices,
 
@@ -795,6 +810,7 @@ def get_item_details():
             "status": "error",
             "message": str(e)
         }
+
 
 
 @frappe.whitelist(allow_guest=False, methods=["POST"])
