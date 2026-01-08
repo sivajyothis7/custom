@@ -2143,19 +2143,19 @@ def submit_sales_invoice():
 
         invoice_name = data.get("invoice_name")
         if not invoice_name:
-            return {"status": "error", "message": "invoice_name is required"}
+            frappe.throw("invoice_name is required")
 
         if not frappe.db.exists("Sales Invoice", invoice_name):
-            return {"status": "error", "message": f"Invoice {invoice_name} not found"}
+            frappe.throw(f"Invoice {invoice_name} not found")
 
         inv = frappe.get_doc("Sales Invoice", invoice_name)
 
         if inv.docstatus == 1:
-            return {"status": "error", "message": "Invoice already submitted"}
+            frappe.throw("Invoice already submitted")
 
         payment_mode = inv.get("custom_mode_of_payment")
         if not payment_mode:
-            return {"status": "error", "message": "custom_mode_of_payment is required"}
+            frappe.throw("custom_mode_of_payment is required")
 
         payment_mode_lower = payment_mode.lower().strip()
 
@@ -2184,7 +2184,6 @@ def submit_sales_invoice():
         receivable_account = frappe.db.get_value(
             "Company", inv.company, "default_receivable_account"
         )
-
         if not receivable_account:
             frappe.throw("Default Receivable Account missing in Company")
 
@@ -2196,24 +2195,17 @@ def submit_sales_invoice():
             },
             "default_account"
         )
-
         if not payment_account:
-            frappe.throw(
-                f"No account configured for Mode of Payment '{payment_mode}'"
-            )
+            frappe.throw(f"No account configured for Mode of Payment '{payment_mode}'")
 
         # -------------------------------------------------
         # BANK MODE → AUTO REFERENCE
         # -------------------------------------------------
-        mop_type = frappe.db.get_value(
-            "Mode of Payment",
-            payment_mode,
-            "type"
-        )
+        mop_type = frappe.db.get_value("Mode of Payment", payment_mode, "type")
 
         if mop_type == "Bank":
-            reference_no = inv.name          # ✅ Invoice No
-            reference_date = getdate()       # ✅ Today
+            reference_no = inv.name      # Invoice No
+            reference_date = getdate()   # Today
         else:
             reference_no = None
             reference_date = None
@@ -2238,7 +2230,6 @@ def submit_sales_invoice():
             "paid_amount": inv.grand_total,
             "received_amount": inv.grand_total,
 
-            # ✅ Mandatory for Bank
             "reference_no": reference_no,
             "reference_date": reference_date,
 
@@ -2252,7 +2243,7 @@ def submit_sales_invoice():
             }]
         })
 
-        # DRAFT only
+        # Draft only
         pe.insert(ignore_permissions=True)
         frappe.db.commit()
 
@@ -2269,10 +2260,9 @@ def submit_sales_invoice():
     except Exception as e:
         frappe.db.rollback()
         frappe.log_error(frappe.get_traceback(), "Submit Sales Invoice Error")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+
+        # 🔥 Important: throw error so HTTP status is NOT 200
+        frappe.throw(str(e))
 
 
 
@@ -3441,6 +3431,43 @@ def get_today_bank_collection():
             "status": "error",
             "message": str(e)
         }
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET"])
+def get_daily_pos_collection():
+    """Today's POS (Shabaka) collection — logged-in user only"""
+
+    try:
+        today = frappe.utils.today()
+        current_user = frappe.session.user
+
+        data = frappe.db.sql("""
+            SELECT
+                COUNT(name) AS payment_count,
+                SUM(paid_amount) AS pos_collection
+            FROM `tabPayment Entry`
+            WHERE
+                posting_date = %s
+                AND docstatus = 1
+                AND payment_type = 'Receive'
+                AND mode_of_payment = 'POS SHABAKA'
+                AND owner = %s
+        """, (today, current_user), as_dict=True)[0]
+
+        return {
+            "status": "success",
+            "date": today,
+            "amount": data.pos_collection or 0,
+            "payments": data.payment_count or 0
+        }
+
+    except Exception as e:
+        frappe.log_error("POS Collection API Error", frappe.get_traceback())
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
 
 
 
