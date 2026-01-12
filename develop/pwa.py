@@ -2131,8 +2131,8 @@ def submit_sales_invoice():
     """
     Final submission logic:
     - Submit Sales Invoice
-    - Credit → No Payment Entry
-    - Cash / POS → Draft Payment Entry
+    - Credit / Credit Card → No Payment Entry
+    - Cash / POS / Bank → Draft Payment Entry
     - Bank → Draft Payment Entry with:
         reference_no   = Invoice No
         reference_date = Today
@@ -2157,21 +2157,21 @@ def submit_sales_invoice():
         if not payment_mode:
             frappe.throw("custom_mode_of_payment is required")
 
-        payment_mode_lower = payment_mode.lower().strip()
+        payment_mode_lower = payment_mode.strip().lower()
 
         # -------------------------------------------------
-        # SUBMIT INVOICE FIRST
+        # SUBMIT INVOICE
         # -------------------------------------------------
         inv.submit()
-        frappe.db.commit()
 
         # -------------------------------------------------
-        # CREDIT → NO PAYMENT ENTRY
+        # SKIP PAYMENT ENTRY (CREDIT / CREDIT CARD)
         # -------------------------------------------------
-        if payment_mode_lower == "credit":
+        if payment_mode_lower in ("credit", "credit card"):
+            frappe.db.commit()
             return {
                 "status": "success",
-                "message": "Invoice submitted successfully (CREDIT). No Payment Entry created.",
+                "message": f"Invoice submitted successfully ({payment_mode}). No Payment Entry created.",
                 "data": {
                     "invoice_name": inv.name,
                     "payment_entry": None
@@ -2179,7 +2179,7 @@ def submit_sales_invoice():
             }
 
         # -------------------------------------------------
-        # FETCH ACCOUNTS
+        # FETCH RECEIVABLE ACCOUNT
         # -------------------------------------------------
         receivable_account = frappe.db.get_value(
             "Company", inv.company, "default_receivable_account"
@@ -2187,6 +2187,9 @@ def submit_sales_invoice():
         if not receivable_account:
             frappe.throw("Default Receivable Account missing in Company")
 
+        # -------------------------------------------------
+        # FETCH PAYMENT ACCOUNT FROM MODE OF PAYMENT
+        # -------------------------------------------------
         payment_account = frappe.db.get_value(
             "Mode of Payment Account",
             {
@@ -2195,8 +2198,11 @@ def submit_sales_invoice():
             },
             "default_account"
         )
+
         if not payment_account:
-            frappe.throw(f"No account configured for Mode of Payment '{payment_mode}'")
+            frappe.throw(
+                f"No account configured for Mode of Payment '{payment_mode}' in company '{inv.company}'"
+            )
 
         # -------------------------------------------------
         # BANK MODE → AUTO REFERENCE
@@ -2204,8 +2210,8 @@ def submit_sales_invoice():
         mop_type = frappe.db.get_value("Mode of Payment", payment_mode, "type")
 
         if mop_type == "Bank":
-            reference_no = inv.name      # Invoice No
-            reference_date = getdate()   # Today
+            reference_no = inv.name
+            reference_date = getdate()
         else:
             reference_no = None
             reference_date = None
@@ -2243,8 +2249,8 @@ def submit_sales_invoice():
             }]
         })
 
-        # Draft only
         pe.insert(ignore_permissions=True)
+
         frappe.db.commit()
 
         return {
@@ -2260,10 +2266,7 @@ def submit_sales_invoice():
     except Exception as e:
         frappe.db.rollback()
         frappe.log_error(frappe.get_traceback(), "Submit Sales Invoice Error")
-
-        # 🔥 Important: throw error so HTTP status is NOT 200
         frappe.throw(str(e))
-
 
 
 
