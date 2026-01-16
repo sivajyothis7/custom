@@ -2124,49 +2124,51 @@ def get_invoice_details():
 import json
 import frappe
 from frappe.utils import getdate
+from frappe import ValidationError
 
 
 @frappe.whitelist(allow_guest=False, methods=["POST"])
 def submit_sales_invoice():
-    """
-    Final submission logic:
-    - Submit Sales Invoice
-    - Credit / Credit Card → No Payment Entry
-    - Cash / POS / Bank → Draft Payment Entry
-    - Bank → Draft Payment Entry with:
-        reference_no   = Invoice No
-        reference_date = Today
-    """
+
+    def error(msg, code=400):
+        frappe.local.response["http_status_code"] = code
+        return {"status": "error", "message": msg}
 
     try:
         data = json.loads(frappe.request.data) if frappe.request.data else frappe.form_dict
 
+        # -----------------------------
+        # VALIDATION
+        # -----------------------------
         invoice_name = data.get("invoice_name")
         if not invoice_name:
-            frappe.throw("invoice_name is required")
+            return error("invoice_name is required", 422)
 
         if not frappe.db.exists("Sales Invoice", invoice_name):
-            frappe.throw(f"Invoice {invoice_name} not found")
+            return error(f"Invoice {invoice_name} not found", 404)
 
         inv = frappe.get_doc("Sales Invoice", invoice_name)
 
         if inv.docstatus == 1:
-            frappe.throw("Invoice already submitted")
+            return error("Invoice already submitted", 409)
+
+        if inv.docstatus == 2:
+            return error("Invoice is cancelled", 409)
 
         payment_mode = inv.get("custom_mode_of_payment")
         if not payment_mode:
-            frappe.throw("custom_mode_of_payment is required")
+            return error("custom_mode_of_payment is required", 422)
 
         payment_mode_lower = payment_mode.strip().lower()
 
-        # -------------------------------------------------
-        # SUBMIT INVOICE
-        # -------------------------------------------------
+        # -----------------------------
+        # SUBMIT INVOICE (STOCK CHECK HAPPENS HERE)
+        # -----------------------------
         inv.submit()
 
-        # -------------------------------------------------
+        # -----------------------------
         # SKIP PAYMENT ENTRY (CREDIT / CREDIT CARD)
-        # -------------------------------------------------
+        # -----------------------------
         if payment_mode_lower in ("credit", "credit card"):
             frappe.db.commit()
             return {
@@ -2178,35 +2180,33 @@ def submit_sales_invoice():
                 }
             }
 
-        # -------------------------------------------------
-        # FETCH RECEIVABLE ACCOUNT
-        # -------------------------------------------------
+        # -----------------------------
+        # RECEIVABLE ACCOUNT
+        # -----------------------------
         receivable_account = frappe.db.get_value(
             "Company", inv.company, "default_receivable_account"
         )
         if not receivable_account:
-            frappe.throw("Default Receivable Account missing in Company")
+            return error("Default Receivable Account missing in Company", 500)
 
-        # -------------------------------------------------
-        # FETCH PAYMENT ACCOUNT FROM MODE OF PAYMENT
-        # -------------------------------------------------
+        # -----------------------------
+        # PAYMENT ACCOUNT FROM MODE OF PAYMENT
+        # -----------------------------
         payment_account = frappe.db.get_value(
             "Mode of Payment Account",
-            {
-                "parent": payment_mode,
-                "company": inv.company
-            },
+            {"parent": payment_mode, "company": inv.company},
             "default_account"
         )
 
         if not payment_account:
-            frappe.throw(
-                f"No account configured for Mode of Payment '{payment_mode}' in company '{inv.company}'"
+            return error(
+                f"No account configured for Mode of Payment '{payment_mode}' in company '{inv.company}'",
+                422
             )
 
-        # -------------------------------------------------
+        # -----------------------------
         # BANK MODE → AUTO REFERENCE
-        # -------------------------------------------------
+        # -----------------------------
         mop_type = frappe.db.get_value("Mode of Payment", payment_mode, "type")
 
         if mop_type == "Bank":
@@ -2216,9 +2216,9 @@ def submit_sales_invoice():
             reference_no = None
             reference_date = None
 
-        # -------------------------------------------------
+        # -----------------------------
         # CREATE PAYMENT ENTRY (DRAFT)
-        # -------------------------------------------------
+        # -----------------------------
         pe = frappe.get_doc({
             "doctype": "Payment Entry",
             "payment_type": "Receive",
@@ -2250,7 +2250,6 @@ def submit_sales_invoice():
         })
 
         pe.insert(ignore_permissions=True)
-
         frappe.db.commit()
 
         return {
@@ -2263,10 +2262,21 @@ def submit_sales_invoice():
             }
         }
 
-    except Exception as e:
+    # -----------------------------
+    # STOCK / VALIDATION ERRORS
+    # -----------------------------
+    except ValidationError as e:
+        frappe.db.rollback()
+        return error(str(e), 409)
+
+    # -----------------------------
+    # SYSTEM ERRORS
+    # -----------------------------
+    except Exception:
         frappe.db.rollback()
         frappe.log_error(frappe.get_traceback(), "Submit Sales Invoice Error")
-        frappe.throw(str(e))
+        return error("Internal server error while submitting invoice", 500)
+
 
 
 
