@@ -2123,8 +2123,9 @@ def get_invoice_details():
 
 import json
 import frappe
-from frappe.utils import getdate
+from frappe.utils import getdate, strip_html
 from frappe import ValidationError
+from erpnext.stock.stock_ledger import NegativeStockError
 
 
 @frappe.whitelist(allow_guest=False, methods=["POST"])
@@ -2132,14 +2133,17 @@ def submit_sales_invoice():
 
     def error(msg, code=400):
         frappe.local.response["http_status_code"] = code
-        return {"status": "error", "message": msg}
+        return {
+            "status": "error",
+            "message": msg
+        }
 
     try:
         data = json.loads(frappe.request.data) if frappe.request.data else frappe.form_dict
 
-        # -----------------------------
+        # -------------------------------------------------
         # VALIDATION
-        # -----------------------------
+        # -------------------------------------------------
         invoice_name = data.get("invoice_name")
         if not invoice_name:
             return error("invoice_name is required", 422)
@@ -2161,14 +2165,14 @@ def submit_sales_invoice():
 
         payment_mode_lower = payment_mode.strip().lower()
 
-        # -----------------------------
-        # SUBMIT INVOICE (STOCK CHECK HAPPENS HERE)
-        # -----------------------------
+        # -------------------------------------------------
+        # SUBMIT INVOICE (ERPNext STOCK CHECK HERE)
+        # -------------------------------------------------
         inv.submit()
 
-        # -----------------------------
-        # SKIP PAYMENT ENTRY (CREDIT / CREDIT CARD)
-        # -----------------------------
+        # -------------------------------------------------
+        # CREDIT / CREDIT CARD → NO PAYMENT ENTRY
+        # -------------------------------------------------
         if payment_mode_lower in ("credit", "credit card"):
             frappe.db.commit()
             return {
@@ -2180,21 +2184,24 @@ def submit_sales_invoice():
                 }
             }
 
-        # -----------------------------
+        # -------------------------------------------------
         # RECEIVABLE ACCOUNT
-        # -----------------------------
+        # -------------------------------------------------
         receivable_account = frappe.db.get_value(
             "Company", inv.company, "default_receivable_account"
         )
         if not receivable_account:
             return error("Default Receivable Account missing in Company", 500)
 
-        # -----------------------------
+        # -------------------------------------------------
         # PAYMENT ACCOUNT FROM MODE OF PAYMENT
-        # -----------------------------
+        # -------------------------------------------------
         payment_account = frappe.db.get_value(
             "Mode of Payment Account",
-            {"parent": payment_mode, "company": inv.company},
+            {
+                "parent": payment_mode,
+                "company": inv.company
+            },
             "default_account"
         )
 
@@ -2204,9 +2211,9 @@ def submit_sales_invoice():
                 422
             )
 
-        # -----------------------------
+        # -------------------------------------------------
         # BANK MODE → AUTO REFERENCE
-        # -----------------------------
+        # -------------------------------------------------
         mop_type = frappe.db.get_value("Mode of Payment", payment_mode, "type")
 
         if mop_type == "Bank":
@@ -2216,9 +2223,9 @@ def submit_sales_invoice():
             reference_no = None
             reference_date = None
 
-        # -----------------------------
+        # -------------------------------------------------
         # CREATE PAYMENT ENTRY (DRAFT)
-        # -----------------------------
+        # -------------------------------------------------
         pe = frappe.get_doc({
             "doctype": "Payment Entry",
             "payment_type": "Receive",
@@ -2262,22 +2269,31 @@ def submit_sales_invoice():
             }
         }
 
-    # -----------------------------
-    # STOCK / VALIDATION ERRORS
-    # -----------------------------
+    # -------------------------------------------------
+    # NEGATIVE STOCK ERROR (CLEAN MESSAGE ONLY)
+    # -------------------------------------------------
+    except NegativeStockError as e:
+        frappe.db.rollback()
+
+        clean_msg = strip_html(str(e))
+        clean_msg = clean_msg.replace("to complete this transaction.", "").strip()
+
+        return error(clean_msg, 409)
+
+    # -------------------------------------------------
+    # OTHER BUSINESS VALIDATION ERRORS
+    # -------------------------------------------------
     except ValidationError as e:
         frappe.db.rollback()
         return error(str(e), 409)
 
-    # -----------------------------
-    # SYSTEM ERRORS
-    # -----------------------------
+    # -------------------------------------------------
+    # SYSTEM / UNEXPECTED ERRORS
+    # -------------------------------------------------
     except Exception:
         frappe.db.rollback()
         frappe.log_error(frappe.get_traceback(), "Submit Sales Invoice Error")
         return error("Internal server error while submitting invoice", 500)
-
-
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET"])
