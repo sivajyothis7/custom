@@ -603,48 +603,60 @@ def get_items_list():
 
 
 
+import frappe
+from frappe.utils import flt
+
+
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_item_details():
     """
     Get item details with:
-    - Stock ONLY from user's warehouse
+    - customer_name as input
+    - Stock from Item Default Warehouse (if exists), else all warehouses
     - Prices from Standard Selling
     - Priority: logged-in user's price → existing customer price
     """
 
     try:
         item_code = frappe.form_dict.get("item_code")
-        customer = frappe.form_dict.get("customer")  # Customer.name
+        customer_name = frappe.form_dict.get("customer_name")
         logged_user = frappe.session.user
 
+        # -----------------------------
+        # VALIDATION
+        # -----------------------------
         if not item_code:
             return {"status": "error", "message": "item_code is required"}
 
-        if not customer:
-            return {"status": "error", "message": "customer is required"}
+        if not customer_name:
+            return {"status": "error", "message": "customer_name is required"}
 
         if not frappe.db.exists("Item", item_code):
+            return {"status": "error", "message": f"Item '{item_code}' not found"}
+
+        # Resolve Customer ID from customer_name
+        customer = frappe.db.get_value(
+            "Customer",
+            {"customer_name": customer_name},
+            "name"
+        )
+
+        if not customer:
             return {
                 "status": "error",
-                "message": f"Item '{item_code}' not found"
+                "message": f"Customer '{customer_name}' not found"
             }
 
         item = frappe.get_doc("Item", item_code)
 
         # ------------------------------------------------
-        # 🔐 USER WAREHOUSE (MANDATORY)
+        # ✅ WAREHOUSE (NO USER PERMISSION)
         # ------------------------------------------------
-        user_warehouse = frappe.db.get_value(
-            "User Permission",
-            {
-                "user": logged_user,
-                "allow": "Warehouse"
-            },
-            "for_value"
+        warehouse = frappe.db.get_value(
+            "Item Default",
+            {"parent": item_code},
+            "default_warehouse"
         )
-
-        if not user_warehouse:
-            frappe.throw("No Warehouse User Permission found for this user")
 
         # ------------------------------------------------
         # UOM CONVERSIONS
@@ -654,34 +666,49 @@ def get_item_details():
             for u in item.uoms
         ]
 
-        # Collect all UOMs (stock + extra)
+        # Collect all UOMs
         uoms = [item.stock_uom]
         for u in item.uoms:
             if u.uom not in uoms:
                 uoms.append(u.uom)
 
         # ------------------------------------------------
-        # STOCK LEVELS (ONLY USER WAREHOUSE)
+        # STOCK LEVELS
         # ------------------------------------------------
         stock_levels = []
+
         if item.is_stock_item:
-            stock_levels = frappe.get_all(
-                "Bin",
-                filters={
-                    "item_code": item_code,
-                    "warehouse": user_warehouse
-                },
-                fields=[
-                    "warehouse",
-                    "actual_qty",
-                    "reserved_qty",
-                    "ordered_qty",
-                    "projected_qty"
-                ]
-            )
+            if warehouse:
+                stock_levels = frappe.get_all(
+                    "Bin",
+                    filters={
+                        "item_code": item_code,
+                        "warehouse": warehouse
+                    },
+                    fields=[
+                        "warehouse",
+                        "actual_qty",
+                        "reserved_qty",
+                        "ordered_qty",
+                        "projected_qty"
+                    ]
+                )
+            else:
+                # fallback → all warehouses
+                stock_levels = frappe.get_all(
+                    "Bin",
+                    filters={"item_code": item_code},
+                    fields=[
+                        "warehouse",
+                        "actual_qty",
+                        "reserved_qty",
+                        "ordered_qty",
+                        "projected_qty"
+                    ]
+                )
 
         # ------------------------------------------------
-        # ITEM PRICES (FOR DISPLAY)
+        # ITEM PRICES (DISPLAY)
         # ------------------------------------------------
         item_prices = frappe.get_all(
             "Item Price",
@@ -706,14 +733,14 @@ def get_item_details():
         )
 
         # ------------------------------------------------
-        # RATES (OWNER FIRST → FALLBACK)
+        # RATES (OWNER FIRST → CUSTOMER FALLBACK)
         # ------------------------------------------------
         rates = {}
 
         for uom in uoms:
             rate = None
 
-            # 1️⃣ Latest price by logged-in user
+            # 1️⃣ latest by logged-in user
             price_row = frappe.get_all(
                 "Item Price",
                 filters={
@@ -731,7 +758,7 @@ def get_item_details():
             if price_row:
                 rate = price_row[0].price_list_rate
 
-            # 2️⃣ Fallback → existing price for customer (any owner)
+            # 2️⃣ fallback any owner
             if rate is None:
                 price_row = frappe.get_all(
                     "Item Price",
@@ -752,7 +779,7 @@ def get_item_details():
             rates[uom] = flt(rate or 0)
 
         # ------------------------------------------------
-        # STANDARD RATE (FINAL)
+        # STANDARD RATE
         # ------------------------------------------------
         standard_rate = (
             rates.get(item.sales_uom)
@@ -765,7 +792,11 @@ def get_item_details():
         # ------------------------------------------------
         return {
             "status": "success",
-            "warehouse": user_warehouse,
+            "warehouse": warehouse,
+            "customer": {
+                "customer_name": customer_name,
+                "customer_id": customer
+            },
             "data": {
                 "item_code": item.item_code,
                 "item_name": item.item_name,
@@ -789,12 +820,14 @@ def get_item_details():
             }
         }
 
-    except Exception as e:
+    except Exception:
         frappe.log_error("Get Item Details Error", frappe.get_traceback())
         return {
             "status": "error",
-            "message": str(e)
+            "message": "Internal Server Error"
         }
+
+
 
 
 @frappe.whitelist(allow_guest=False, methods=["POST"])
