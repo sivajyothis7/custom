@@ -607,19 +607,28 @@ import frappe
 from frappe.utils import flt
 
 
+import frappe
+from frappe.utils import flt
+
+
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_item_details():
     """
-    Get item details with:
-    - customer_name as input
-    - Stock from Item Default Warehouse (if exists), else all warehouses
-    - Prices from Standard Selling
-    - Priority: logged-in user's price → existing customer price
+    Frontend sends:
+        ?item_code=XXX&customer=Customer Name
+
+    Backend:
+        - Treats `customer` as customer_name
+        - Resolves Customer.name (ID) internally
+        - No user warehouse permission logic
     """
 
     try:
         item_code = frappe.form_dict.get("item_code")
-        customer_name = frappe.form_dict.get("customer_name")
+
+        # 🔥 FRONTEND PARAM (customer_name comes as customer)
+        customer_name = frappe.form_dict.get("customer")
+
         logged_user = frappe.session.user
 
         # -----------------------------
@@ -629,12 +638,12 @@ def get_item_details():
             return {"status": "error", "message": "item_code is required"}
 
         if not customer_name:
-            return {"status": "error", "message": "customer_name is required"}
+            return {"status": "error", "message": "customer is required"}
 
         if not frappe.db.exists("Item", item_code):
             return {"status": "error", "message": f"Item '{item_code}' not found"}
 
-        # Resolve Customer ID from customer_name
+        # ✅ Resolve Customer ID using customer_name
         customer = frappe.db.get_value(
             "Customer",
             {"customer_name": customer_name},
@@ -650,7 +659,7 @@ def get_item_details():
         item = frappe.get_doc("Item", item_code)
 
         # ------------------------------------------------
-        # ✅ WAREHOUSE (NO USER PERMISSION)
+        # WAREHOUSE → ITEM DEFAULT ONLY
         # ------------------------------------------------
         warehouse = frappe.db.get_value(
             "Item Default",
@@ -666,7 +675,6 @@ def get_item_details():
             for u in item.uoms
         ]
 
-        # Collect all UOMs
         uoms = [item.stock_uom]
         for u in item.uoms:
             if u.uom not in uoms:
@@ -681,10 +689,7 @@ def get_item_details():
             if warehouse:
                 stock_levels = frappe.get_all(
                     "Bin",
-                    filters={
-                        "item_code": item_code,
-                        "warehouse": warehouse
-                    },
+                    filters={"item_code": item_code, "warehouse": warehouse},
                     fields=[
                         "warehouse",
                         "actual_qty",
@@ -694,7 +699,6 @@ def get_item_details():
                     ]
                 )
             else:
-                # fallback → all warehouses
                 stock_levels = frappe.get_all(
                     "Bin",
                     filters={"item_code": item_code},
@@ -733,7 +737,7 @@ def get_item_details():
         )
 
         # ------------------------------------------------
-        # RATES (OWNER FIRST → CUSTOMER FALLBACK)
+        # RATES (OWNER → CUSTOMER FALLBACK)
         # ------------------------------------------------
         rates = {}
 
