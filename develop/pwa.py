@@ -607,28 +607,22 @@ import frappe
 from frappe.utils import flt
 
 
-import frappe
-from frappe.utils import flt
-
-
 @frappe.whitelist(allow_guest=False, methods=["GET"])
 def get_item_details():
     """
     Frontend sends:
-        ?item_code=XXX&customer=Customer Name
+        ?item_code=XXX&customer=Customer Display Name OR Customer ID OR English Name
 
     Backend:
-        - Treats `customer` as customer_name
-        - Resolves Customer.name (ID) internally
-        - No user warehouse permission logic
+        - Resolves Customer ID correctly
+        - Uses Item Price based on Customer ID
+        - No User Permission warehouse logic
+        - Stock from Item Default warehouse, else all warehouses
     """
 
     try:
         item_code = frappe.form_dict.get("item_code")
-
-        # 🔥 FRONTEND PARAM (customer_name comes as customer)
-        customer_name = frappe.form_dict.get("customer")
-
+        customer_param = frappe.form_dict.get("customer")  # may be name or ID or English name
         logged_user = frappe.session.user
 
         # -----------------------------
@@ -637,29 +631,48 @@ def get_item_details():
         if not item_code:
             return {"status": "error", "message": "item_code is required"}
 
-        if not customer_name:
+        if not customer_param:
             return {"status": "error", "message": "customer is required"}
 
         if not frappe.db.exists("Item", item_code):
             return {"status": "error", "message": f"Item '{item_code}' not found"}
 
-        # ✅ Resolve Customer ID using customer_name
-        customer = frappe.db.get_value(
-            "Customer",
-            {"customer_name": customer_name},
-            "name"
-        )
+        # ------------------------------------------------
+        # ✅ RESOLVE CUSTOMER ID (VERY IMPORTANT)
+        # ------------------------------------------------
+
+        customer = None
+
+        # 1. If already Customer ID
+        if frappe.db.exists("Customer", customer_param):
+            customer = customer_param
+
+        # 2. Match by customer_name (Arabic)
+        if not customer:
+            customer = frappe.db.get_value(
+                "Customer",
+                {"customer_name": customer_param},
+                "name"
+            )
+
+        # 3. Match by English name (custom field)
+        if not customer:
+            customer = frappe.db.get_value(
+                "Customer",
+                {"customer_name_english": customer_param},
+                "name"
+            )
 
         if not customer:
             return {
                 "status": "error",
-                "message": f"Customer '{customer_name}' not found"
+                "message": f"Customer '{customer_param}' not found"
             }
 
         item = frappe.get_doc("Item", item_code)
 
         # ------------------------------------------------
-        # WAREHOUSE → ITEM DEFAULT ONLY
+        # WAREHOUSE → ITEM DEFAULT, ELSE ALL
         # ------------------------------------------------
         warehouse = frappe.db.get_value(
             "Item Default",
@@ -744,7 +757,7 @@ def get_item_details():
         for uom in uoms:
             rate = None
 
-            # 1️⃣ latest by logged-in user
+            # 1️⃣ Latest by logged-in user
             price_row = frappe.get_all(
                 "Item Price",
                 filters={
@@ -762,7 +775,7 @@ def get_item_details():
             if price_row:
                 rate = price_row[0].price_list_rate
 
-            # 2️⃣ fallback any owner
+            # 2️⃣ Fallback any owner
             if rate is None:
                 price_row = frappe.get_all(
                     "Item Price",
@@ -798,7 +811,7 @@ def get_item_details():
             "status": "success",
             "warehouse": warehouse,
             "customer": {
-                "customer_name": customer_name,
+                "input": customer_param,
                 "customer_id": customer
             },
             "data": {
@@ -830,7 +843,6 @@ def get_item_details():
             "status": "error",
             "message": "Internal Server Error"
         }
-
 
 
 
