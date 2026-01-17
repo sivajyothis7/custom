@@ -1804,6 +1804,11 @@ def get_conversion_factor(item_code, uom):
     return flt(conversion_factor)
 
 
+import json
+import frappe
+from frappe.utils import flt, cint, getdate
+
+
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def create_sales_invoice():
 
@@ -1817,9 +1822,12 @@ def create_sales_invoice():
             if not data.get(field):
                 return {"status": "error", "message": f"'{field}' is required"}
 
-        customer_name = data["customer_name"]
+        customer_param = data["customer_name"]   # DISPLAY NAME OR ID
         company = data["company"]
 
+        # --------------------------------------------------
+        # COMPANY
+        # --------------------------------------------------
         if not frappe.db.exists("Company", company):
             return {"status": "error", "message": f"Company '{company}' not found"}
 
@@ -1829,48 +1837,68 @@ def create_sales_invoice():
             return {"status": "error", "message": "Company missing default accounts"}
 
         # --------------------------------------------------
-        # CUSTOMER
+        # ✅ RESOLVE ACTIVE CUSTOMER ONLY
         # --------------------------------------------------
-        create_or_update_customer({
-            "customer_name": customer_name,
-            "customer_type": data.get("customer_type", "Company"),
-            "customer_group": data.get("customer_group", "Commercial"),
-            "territory": data.get("territory", "Saudi Arabia"),
-            "tax_id": data.get("tax_id")
-        })
+        customer = None
 
+        # 1. Active customer with ID = param
+        customer = frappe.db.get_value(
+            "Customer",
+            {"name": customer_param, "disabled": 0},
+            "name"
+        )
+
+        # 2. Active customer with customer_name = param
+        if not customer:
+            customer = frappe.db.get_value(
+                "Customer",
+                {"customer_name": customer_param, "disabled": 0},
+                "name"
+            )
+
+        # 3. Active customer with English name (custom field)
+        if not customer:
+            customer = frappe.db.get_value(
+                "Customer",
+                {"customer_name_english": customer_param, "disabled": 0},
+                "name"
+            )
+
+        if not customer:
+            return {
+                "status": "error",
+                "message": f"Active customer matching '{customer_param}' not found"
+            }
+
+        # --------------------------------------------------
+        # DATES & FLAGS
+        # --------------------------------------------------
         posting_date = getdate(data.get("posting_date") or getdate())
         due_date = getdate(data.get("due_date") or posting_date)
         update_stock = cint(data.get("update_stock", 0))
 
         # --------------------------------------------------
-        # CUSTOM MODE OF PAYMENT ✅
+        # CUSTOM MODE OF PAYMENT
         # --------------------------------------------------
         custom_mode_of_payment = data.get("custom_mode_of_payment")
 
-        if custom_mode_of_payment and not frappe.db.exists(
-            "Mode of Payment", custom_mode_of_payment
-        ):
+        if custom_mode_of_payment and not frappe.db.exists("Mode of Payment", custom_mode_of_payment):
             return {
                 "status": "error",
                 "message": f"Mode of Payment '{custom_mode_of_payment}' not found"
             }
 
         # --------------------------------------------------
-        # FORCE WAREHOUSE FOR ACCOUNTS
+        # WAREHOUSE
         # --------------------------------------------------
         user = frappe.get_doc("User", frappe.session.user)
 
         if user.role_profile_name == "Accounts":
             target_warehouse = frappe.db.get_value(
                 "User Permission",
-                {
-                    "user": frappe.session.user,
-                    "allow": "Warehouse"
-                },
+                {"user": frappe.session.user, "allow": "Warehouse"},
                 "for_value"
             )
-
             if not target_warehouse:
                 frappe.throw("No Warehouse User Permission found for this user")
         else:
@@ -1927,11 +1955,7 @@ def create_sales_invoice():
         # --------------------------------------------------
         tax_template = frappe.db.get_value(
             "Sales Taxes and Charges Template",
-            {
-                "company": company,
-                "is_default": 1,
-                "disabled": 0
-            },
+            {"company": company, "is_default": 1, "disabled": 0},
             "name"
         )
 
@@ -1962,7 +1986,7 @@ def create_sales_invoice():
             if doc.docstatus != 0:
                 return {"status": "error", "message": "Invoice already submitted"}
 
-            doc.customer = customer_name
+            doc.customer = customer
             doc.company = company
             doc.posting_date = posting_date
             doc.due_date = due_date
@@ -1975,7 +1999,7 @@ def create_sales_invoice():
         else:
             doc = frappe.get_doc({
                 "doctype": "Sales Invoice",
-                "customer": customer_name,
+                "customer": customer,   # ✅ ACTIVE CUSTOMER ID
                 "company": company,
                 "posting_date": posting_date,
                 "due_date": due_date,
@@ -2013,22 +2037,19 @@ def create_sales_invoice():
         return {
             "status": "success",
             "invoice_name": doc.name,
-            "custom_mode_of_payment": doc.custom_mode_of_payment,
+            "customer_id": customer,
+            "input_customer": customer_param,
             "grand_total": doc.grand_total,
-            "vat_amount": doc.total_taxes_and_charges,
-            "items": [{
-                "item_code": i.item_code,
-                "qty": i.qty,
-                "uom": i.uom,
-                "conversion_factor": i.conversion_factor,
-                "stock_qty": i.stock_qty
-            } for i in doc.items]
+            "vat_amount": doc.total_taxes_and_charges
         }
 
     except Exception as e:
         frappe.db.rollback()
         frappe.log_error(frappe.get_traceback(), "Sales Invoice API Error")
         return {"status": "error", "message": str(e)}
+
+
+
 
 
 import frappe
