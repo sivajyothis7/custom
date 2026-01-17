@@ -611,18 +611,18 @@ from frappe.utils import flt
 def get_item_details():
     """
     Frontend sends:
-        ?item_code=XXX&customer=Customer Display Name OR Customer ID OR English Name
+        ?item_code=XXX&customer=Customer ID or Arabic Name or English Name
 
     Backend:
-        - Resolves Customer ID correctly
-        - Uses Item Price based on Customer ID
+        - Resolves ONLY ENABLED Customer
+        - Converts to Customer ID for Item Price
         - No User Permission warehouse logic
         - Stock from Item Default warehouse, else all warehouses
     """
 
     try:
         item_code = frappe.form_dict.get("item_code")
-        customer_param = frappe.form_dict.get("customer")  # may be name or ID or English name
+        customer_param = frappe.form_dict.get("customer")  # ID or name
         logged_user = frappe.session.user
 
         # -----------------------------
@@ -638,20 +638,22 @@ def get_item_details():
             return {"status": "error", "message": f"Item '{item_code}' not found"}
 
         # ------------------------------------------------
-        # ✅ RESOLVE CUSTOMER ID (VERY IMPORTANT)
+        # ✅ RESOLVE ENABLED CUSTOMER ID ONLY
         # ------------------------------------------------
-
         customer = None
 
-        # 1. If already Customer ID
-        if frappe.db.exists("Customer", customer_param):
-            customer = customer_param
+        # 1. Match by ID (name)
+        customer = frappe.db.get_value(
+            "Customer",
+            {"name": customer_param, "disabled": 0},
+            "name"
+        )
 
         # 2. Match by customer_name (Arabic)
         if not customer:
             customer = frappe.db.get_value(
                 "Customer",
-                {"customer_name": customer_param},
+                {"customer_name": customer_param, "disabled": 0},
                 "name"
             )
 
@@ -659,14 +661,14 @@ def get_item_details():
         if not customer:
             customer = frappe.db.get_value(
                 "Customer",
-                {"customer_name_english": customer_param},
+                {"customer_name_english": customer_param, "disabled": 0},
                 "name"
             )
 
         if not customer:
             return {
                 "status": "error",
-                "message": f"Customer '{customer_param}' not found"
+                "message": f"Active customer '{customer_param}' not found"
             }
 
         item = frappe.get_doc("Item", item_code)
