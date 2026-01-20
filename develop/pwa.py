@@ -2191,7 +2191,187 @@ def get_invoice_details():
             "message": str(e)
         }
 
+##update invoice
 
+import json
+import frappe
+from frappe.utils import flt, cint, getdate
+
+
+@frappe.whitelist(allow_guest=False, methods=["POST"])
+def update_sales_invoice():
+    """
+    Update an EXISTING Sales Invoice (Draft only).
+    Only fields provided in payload will be updated.
+    """
+
+    try:
+        data = json.loads(frappe.request.data) if frappe.request.data else frappe.form_dict
+
+        # --------------------------------------------------
+        # REQUIRED: Invoice Name
+        # --------------------------------------------------
+        invoice_name = data.get("invoice_name")
+        if not invoice_name:
+            return {"status": "error", "message": "'invoice_name' is required"}
+
+        if not frappe.db.exists("Sales Invoice", invoice_name):
+            return {"status": "error", "message": f"Sales Invoice '{invoice_name}' not found"}
+
+        doc = frappe.get_doc("Sales Invoice", invoice_name)
+
+        if doc.docstatus != 0:
+            return {
+                "status": "error",
+                "message": "Only Draft Sales Invoices can be updated"
+            }
+
+        # --------------------------------------------------
+        # UPDATE CUSTOMER (OPTIONAL)
+        # --------------------------------------------------
+        if data.get("customer_name"):
+            customer_param = data.get("customer_name")
+
+            customer = (
+                frappe.db.get_value("Customer", {"name": customer_param, "disabled": 0}, "name")
+                or frappe.db.get_value("Customer", {"customer_name": customer_param, "disabled": 0}, "name")
+                or frappe.db.get_value("Customer", {"custom_customer_name_english": customer_param, "disabled": 0}, "name")
+            )
+
+            if not customer:
+                return {
+                    "status": "error",
+                    "message": f"Customer '{customer_param}' not found"
+                }
+
+            doc.customer = customer
+
+        # --------------------------------------------------
+        # UPDATE DATES (OPTIONAL)
+        # --------------------------------------------------
+        if data.get("posting_date"):
+            doc.posting_date = getdate(data.get("posting_date"))
+
+        if data.get("due_date"):
+            doc.due_date = getdate(data.get("due_date"))
+
+        # --------------------------------------------------
+        # UPDATE MODE OF PAYMENT (OPTIONAL)
+        # --------------------------------------------------
+        if data.get("custom_mode_of_payment"):
+            if not frappe.db.exists("Mode of Payment", data.get("custom_mode_of_payment")):
+                return {
+                    "status": "error",
+                    "message": f"Mode of Payment '{data.get('custom_mode_of_payment')}' not found"
+                }
+            doc.custom_mode_of_payment = data.get("custom_mode_of_payment")
+
+        # --------------------------------------------------
+        # UPDATE STOCK FLAG (OPTIONAL)
+        # --------------------------------------------------
+        if "update_stock" in data:
+            doc.update_stock = cint(data.get("update_stock"))
+
+        # --------------------------------------------------
+        # UPDATE WAREHOUSE (ONLY IF update_stock = 1)
+        # --------------------------------------------------
+        if doc.update_stock:
+            user = frappe.get_doc("User", frappe.session.user)
+
+            if user.role_profile_name == "Accounts":
+                warehouse = frappe.db.get_value(
+                    "User Permission",
+                    {"user": frappe.session.user, "allow": "Warehouse"},
+                    "for_value"
+                )
+                if not warehouse:
+                    frappe.throw("No Warehouse User Permission found")
+            else:
+                warehouse = data.get("target_warehouse") or doc.set_warehouse
+
+            doc.set_warehouse = warehouse
+
+        # --------------------------------------------------
+        # UPDATE ITEMS (OPTIONAL – REPLACES EXISTING ITEMS)
+        # --------------------------------------------------
+        if data.get("items"):
+            doc.set("items", [])
+
+            company_doc = frappe.get_doc("Company", doc.company)
+
+            for item in data.get("items"):
+                if not item.get("item_code"):
+                    continue
+
+                row = {
+                    "item_code": item.get("item_code"),
+                    "qty": flt(item.get("qty", 1)),
+                    "rate": flt(item.get("rate", 0)),
+                    "uom": item.get("uom", "Nos"),
+                    "income_account": company_doc.default_income_account,
+                    "cost_center": company_doc.cost_center
+                }
+
+                if doc.update_stock and doc.set_warehouse:
+                    row["warehouse"] = doc.set_warehouse
+
+                doc.append("items", row)
+
+            # Refresh default taxes
+            tax_template = frappe.db.get_value(
+                "Sales Taxes and Charges Template",
+                {"company": doc.company, "is_default": 1, "disabled": 0},
+                "name"
+            )
+
+            if tax_template:
+                tpl = frappe.get_doc("Sales Taxes and Charges Template", tax_template)
+                doc.set("taxes", [])
+                for t in tpl.taxes:
+                    doc.append("taxes", {
+                        "charge_type": t.charge_type,
+                        "account_head": t.account_head,
+                        "description": t.description,
+                        "rate": t.rate,
+                        "cost_center": company_doc.cost_center
+                    })
+                doc.taxes_and_charges = tax_template
+
+        # --------------------------------------------------
+        # UPDATE DISCOUNT (OPTIONAL)
+        # --------------------------------------------------
+        if "discount_amount" in data:
+            doc.discount_amount = flt(data.get("discount_amount"))
+            doc.apply_discount_on = data.get("apply_discount_on", "Grand Total")
+
+        if "discount_percentage" in data:
+            doc.additional_discount_percentage = flt(data.get("discount_percentage"))
+            doc.apply_discount_on = data.get("apply_discount_on", "Grand Total")
+
+        # --------------------------------------------------
+        # SAVE
+        # --------------------------------------------------
+        doc.set_missing_values()
+        doc.calculate_taxes_and_totals()
+        doc.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        return {
+            "status": "success",
+            "message": f"Sales Invoice '{doc.name}' updated successfully",
+            "invoice_name": doc.name,
+            "grand_total": doc.grand_total,
+            "net_total": doc.net_total,
+            "vat_amount": doc.total_taxes_and_charges
+        }
+
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.log_error(frappe.get_traceback(), "Update Sales Invoice Error")
+        return {"status": "error", "message": str(e)}
+
+
+##submit Invoice
 
 import json
 import frappe
