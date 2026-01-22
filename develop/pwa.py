@@ -1996,6 +1996,12 @@ def create_sales_invoice():
             doc.apply_discount_on = data.get("apply_discount_on", "Grand Total")
 
         doc.set_missing_values()
+        
+        # Force set dates to today AFTER set_missing_values to override any frontend values
+        doc.posting_date = getdate(today())
+        doc.posting_time = nowtime()
+        doc.due_date = getdate(today())
+        
         doc.calculate_taxes_and_totals()
         doc.insert(ignore_permissions=True)
         frappe.db.commit()
@@ -2307,16 +2313,15 @@ def update_sales_invoice():
             doc.apply_discount_on = data.get("apply_discount_on", "Grand Total")
 
         # --------------------------------------------------
-        # UPDATE DATES - Always set to today to avoid validation errors
-        # --------------------------------------------------
-        doc.posting_date = getdate(today())
-        doc.posting_time = nowtime()
-        doc.due_date = getdate(today())
-
-        # --------------------------------------------------
         # SAVE
         # --------------------------------------------------
         doc.set_missing_values()
+        
+        # Force set dates to today AFTER set_missing_values to override any frontend values
+        doc.posting_date = getdate(today())
+        doc.posting_time = nowtime()
+        doc.due_date = getdate(today())
+        
         doc.calculate_taxes_and_totals()
         doc.save(ignore_permissions=True)
         frappe.db.commit()
