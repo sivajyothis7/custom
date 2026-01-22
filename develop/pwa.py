@@ -1998,12 +1998,26 @@ def create_sales_invoice():
         doc.set_missing_values()
         
         # Force set dates: posting_date = today, due_date = today+1 AFTER set_missing_values to override any frontend values
+        tomorrow_date = add_days(getdate(today()), 1)
         doc.posting_date = getdate(today())
         doc.posting_time = nowtime()
-        doc.due_date = add_days(getdate(today()), 1)
+        doc.due_date = tomorrow_date
         
         doc.calculate_taxes_and_totals()
+        
+        # Update payment_schedule due_dates to tomorrow_date AFTER calculate_taxes_and_totals
+        # (since calculate_taxes_and_totals might regenerate payment_schedule)
+        if doc.payment_schedule:
+            for payment in doc.payment_schedule:
+                payment.due_date = tomorrow_date
+        
         doc.insert(ignore_permissions=True)
+        
+        # Update payment_schedule due_dates in database directly
+        if doc.payment_schedule:
+            for payment in doc.payment_schedule:
+                frappe.db.set_value("Payment Schedule", payment.name, "due_date", tomorrow_date, update_modified=False)
+        
         frappe.db.commit()
 
         return {
@@ -2328,6 +2342,11 @@ def update_sales_invoice():
         doc.posting_time = current_time
         doc.due_date = tomorrow_date
         
+        # Update payment_schedule due_dates to tomorrow_date
+        if doc.payment_schedule:
+            for payment in doc.payment_schedule:
+                payment.due_date = tomorrow_date
+        
         doc.save(ignore_permissions=True)
         
         # Force update dates in database directly as backup to ensure they persist
@@ -2337,6 +2356,11 @@ def update_sales_invoice():
             "posting_time": current_time,
             "due_date": tomorrow_date
         }, update_modified=False)
+        
+        # Update payment_schedule due_dates in database directly
+        if doc.payment_schedule:
+            for payment in doc.payment_schedule:
+                frappe.db.set_value("Payment Schedule", payment.name, "due_date", tomorrow_date, update_modified=False)
         
         frappe.db.commit()
         
