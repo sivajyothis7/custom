@@ -1806,7 +1806,7 @@ def get_conversion_factor(item_code, uom):
 
 import json
 import frappe
-from frappe.utils import flt, cint, getdate, nowtime, today
+from frappe.utils import flt, cint, getdate, nowtime, today, add_days
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
@@ -1856,10 +1856,10 @@ def create_sales_invoice():
             }
 
         # --------------------------------------------------
-        # DATES & FLAGS - Always set to today to avoid validation errors
+        # DATES & FLAGS - Always set to today for posting_date, today+1 for due_date
         # --------------------------------------------------
         posting_date = getdate(today())
-        due_date = getdate(today())
+        due_date = add_days(getdate(today()), 1)
 
         update_stock = cint(data.get("update_stock", 0))
 
@@ -1997,10 +1997,10 @@ def create_sales_invoice():
 
         doc.set_missing_values()
         
-        # Force set dates to today AFTER set_missing_values to override any frontend values
+        # Force set dates: posting_date = today, due_date = today+1 AFTER set_missing_values to override any frontend values
         doc.posting_date = getdate(today())
         doc.posting_time = nowtime()
-        doc.due_date = getdate(today())
+        doc.due_date = add_days(getdate(today()), 1)
         
         doc.calculate_taxes_and_totals()
         doc.insert(ignore_permissions=True)
@@ -2165,7 +2165,7 @@ def get_invoice_details():
 
 import json
 import frappe
-from frappe.utils import flt, cint, getdate, today, nowtime
+from frappe.utils import flt, cint, getdate, today, nowtime, add_days
 
 
 @frappe.whitelist(allow_guest=False, methods=["POST"])
@@ -2318,14 +2318,15 @@ def update_sales_invoice():
         doc.set_missing_values()
         doc.calculate_taxes_and_totals()
         
-        # Force set dates to today RIGHT BEFORE save to override any frontend values or hooks
+        # Force set dates: posting_date = today, due_date = today+1 RIGHT BEFORE save to override any frontend values or hooks
         # This must be after calculate_taxes_and_totals() to ensure dates are final
         today_date = getdate(today())
+        tomorrow_date = add_days(today_date, 1)
         current_time = nowtime()
         
         doc.posting_date = today_date
         doc.posting_time = current_time
-        doc.due_date = today_date
+        doc.due_date = tomorrow_date
         
         doc.save(ignore_permissions=True)
         
@@ -2334,7 +2335,7 @@ def update_sales_invoice():
         frappe.db.set_value("Sales Invoice", doc.name, {
             "posting_date": today_date,
             "posting_time": current_time,
-            "due_date": today_date
+            "due_date": tomorrow_date
         }, update_modified=False)
         
         frappe.db.commit()
