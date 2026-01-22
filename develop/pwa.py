@@ -1806,7 +1806,7 @@ def get_conversion_factor(item_code, uom):
 
 import json
 import frappe
-from frappe.utils import flt, cint, getdate, nowtime
+from frappe.utils import flt, cint, getdate, nowtime, today
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
@@ -1856,14 +1856,10 @@ def create_sales_invoice():
             }
 
         # --------------------------------------------------
-        # DATES & FLAGS  ✅ FIXED
+        # DATES & FLAGS - Always set to today to avoid validation errors
         # --------------------------------------------------
-        posting_date = getdate(data.get("posting_date") or getdate())
-        due_date = getdate(data.get("due_date") or posting_date)
-
-        # Ensure due_date is not before posting_date
-        if due_date < posting_date:
-            due_date = posting_date
+        posting_date = getdate(today())
+        due_date = getdate(today())
 
         update_stock = cint(data.get("update_stock", 0))
 
@@ -2311,25 +2307,11 @@ def update_sales_invoice():
             doc.apply_discount_on = data.get("apply_discount_on", "Grand Total")
 
         # --------------------------------------------------
-        # UPDATE DATES (OPTIONAL - WITH VALIDATION)
+        # UPDATE DATES - Always set to today to avoid validation errors
         # --------------------------------------------------
-        # Allow custom dates if provided, otherwise use today
-        if data.get("posting_date"):
-            doc.posting_date = getdate(data.get("posting_date"))
-        else:
-            doc.posting_date = getdate(today())
-        
+        doc.posting_date = getdate(today())
         doc.posting_time = nowtime()
-        
-        # Set due_date - ensure it's not before posting_date
-        if data.get("due_date"):
-            due_date = getdate(data.get("due_date"))
-            # Ensure due_date is not before posting_date
-            if due_date < doc.posting_date:
-                due_date = doc.posting_date
-            doc.due_date = due_date
-        else:
-            doc.due_date = doc.posting_date
+        doc.due_date = getdate(today())
 
         # --------------------------------------------------
         # SAVE
