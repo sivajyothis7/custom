@@ -1861,6 +1861,7 @@ def create_sales_invoice():
         posting_date = getdate(data.get("posting_date") or getdate())
         due_date = getdate(data.get("due_date") or posting_date)
 
+        # Ensure due_date is not before posting_date
         if due_date < posting_date:
             due_date = posting_date
 
@@ -2310,11 +2311,25 @@ def update_sales_invoice():
             doc.apply_discount_on = data.get("apply_discount_on", "Grand Total")
 
         # --------------------------------------------------
-        # 🔒 FORCE SAFE DATES (NO VALIDATION ERRORS)
+        # UPDATE DATES (OPTIONAL - WITH VALIDATION)
         # --------------------------------------------------
-        doc.posting_date = getdate(today())
+        # Allow custom dates if provided, otherwise use today
+        if data.get("posting_date"):
+            doc.posting_date = getdate(data.get("posting_date"))
+        else:
+            doc.posting_date = getdate(today())
+        
         doc.posting_time = nowtime()
-        doc.due_date = getdate(today())
+        
+        # Set due_date - ensure it's not before posting_date
+        if data.get("due_date"):
+            due_date = getdate(data.get("due_date"))
+            # Ensure due_date is not before posting_date
+            if due_date < doc.posting_date:
+                due_date = doc.posting_date
+            doc.due_date = due_date
+        else:
+            doc.due_date = doc.posting_date
 
         # --------------------------------------------------
         # SAVE
