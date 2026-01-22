@@ -2316,15 +2316,31 @@ def update_sales_invoice():
         # SAVE
         # --------------------------------------------------
         doc.set_missing_values()
-        
-        # Force set dates to today AFTER set_missing_values to override any frontend values
-        doc.posting_date = getdate(today())
-        doc.posting_time = nowtime()
-        doc.due_date = getdate(today())
-        
         doc.calculate_taxes_and_totals()
+        
+        # Force set dates to today RIGHT BEFORE save to override any frontend values or hooks
+        # This must be after calculate_taxes_and_totals() to ensure dates are final
+        today_date = getdate(today())
+        current_time = nowtime()
+        
+        doc.posting_date = today_date
+        doc.posting_time = current_time
+        doc.due_date = today_date
+        
         doc.save(ignore_permissions=True)
+        
+        # Force update dates in database directly as backup to ensure they persist
+        # This bypasses any validation or hooks that might override dates during save
+        frappe.db.set_value("Sales Invoice", doc.name, {
+            "posting_date": today_date,
+            "posting_time": current_time,
+            "due_date": today_date
+        }, update_modified=False)
+        
         frappe.db.commit()
+        
+        # Reload document to get the updated dates
+        doc.reload()
 
         return {
             "status": "success",
