@@ -1,8 +1,7 @@
 // Copyright (c) 2025, siva and contributors
 // For license information, please see license.txt
 
-
-
+//Report filter for Item Wise Sales
 frappe.query_reports["item wise sales"] = {
     filters: [
         {
