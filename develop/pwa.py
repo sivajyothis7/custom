@@ -41,22 +41,6 @@ def get_user_warehouse():
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def login():
-    """
-    Custom login API using email and password
-    
-    Method: POST
-    URL: /api/method/your_app.api.login
-    Content-Type: application/json
-    
-    Body:
-    {
-        "email": "user@example.com",
-        "password": "your_password"
-    }
-    
-    Returns:
-        JSON with authentication token and user details
-    """
     try:
         data = json.loads(frappe.request.data) if frappe.request.data else frappe.form_dict
         
@@ -64,40 +48,36 @@ def login():
         password = data.get("password")
         
         if not email or not password:
-            return {
-                "status": "error",
-                "message": "Email and password are required"
-            }
+            return {"status": "error", "message": "Email and password are required"}
         
+        # Authenticate
         try:
             frappe.auth.check_password(email, password)
         except frappe.exceptions.AuthenticationError:
-            return {
-                "status": "error",
-                "message": "Invalid email or password"
-            }
+            return {"status": "error", "message": "Invalid email or password"}
         
         user = frappe.get_doc("User", email)
         
-        if user.enabled == 0:
-            return {
-                "status": "error",
-                "message": "User account is disabled"
-            }
+        if not user.enabled:
+            return {"status": "error", "message": "User account is disabled"}
         
-        api_key = user.api_key
-        api_secret = None
-        
-        if not api_key:
+        # Handle API keys safely
+        try:
+            if not user.api_key:
+                raise Exception("No API key")
+
+            api_key = user.api_key
+            api_secret = user.get_password("api_secret")
+
+        except Exception:
+            # Regenerate if missing OR broken encryption
             api_key = frappe.generate_hash(length=15)
             api_secret = frappe.generate_hash(length=15)
-            
+
             user.api_key = api_key
             user.api_secret = api_secret
             user.save(ignore_permissions=True)
             frappe.db.commit()
-        else:
-            api_secret = user.get_password('api_secret')
         
         token = generate_custom_token(email)
         
@@ -111,16 +91,14 @@ def login():
                 "token": token,
                 "api_key": api_key,
                 "api_secret": api_secret,
-                "expires_in": 86400 
+                "expires_in": 86400
             }
         }
         
     except Exception as e:
         frappe.log_error("Login API Error", frappe.get_traceback())
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        return {"status": "error", "message": str(e)}
+
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
