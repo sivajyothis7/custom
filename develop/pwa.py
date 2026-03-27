@@ -4655,3 +4655,46 @@ def get_stock_balance():
             "status": "error",
             "message": str(e)
         }
+
+
+
+#Delete Draft Sales Invoice API
+
+@frappe.whitelist(allow_guest=True, methods=["DELETE", "POST"])
+def delete_draft_sales_invoice():
+    try:
+        data = json.loads(frappe.request.data) if frappe.request.data else frappe.form_dict
+
+        invoice_name = data.get("invoice_name")
+
+        if not invoice_name:
+            return {"status": "error", "message": "invoice_name is required"}
+
+        if not frappe.db.exists("Sales Invoice", invoice_name):
+            return {"status": "error", "message": f"Sales Invoice '{invoice_name}' not found"}
+
+        invoice = frappe.get_doc("Sales Invoice", invoice_name)
+
+        if invoice.docstatus != 0:
+            status_label = "Submitted" if invoice.docstatus == 1 else "Cancelled"
+            return {
+                "status": "error",
+                "message": f"Cannot delete '{invoice_name}'. Only Draft invoices can be deleted. Current status: {status_label}"
+            }
+
+        
+        frappe.delete_doc("Sales Invoice", invoice_name, ignore_permissions=True, force=True)
+        frappe.db.commit()
+
+        return {
+            "status": "success",
+            "message": f"Draft Sales Invoice '{invoice_name}' deleted successfully"
+        }
+
+    except frappe.PermissionError:
+        return {"status": "error", "message": "Permission denied"}
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.log_error("Delete Draft Sales Invoice Error", frappe.get_traceback())
+        return {"status": "error", "message": str(e)}
+
